@@ -2391,8 +2391,12 @@ export class ProxyServer {
       buildClientModel({ id: 'CLAUDE_3_7_SONNET_20250219_V1_0', created: now, ownedBy: 'kiro-api', description: 'Claude 3.7 Sonnet (CodeWhisperer internal ID)', modelName: 'Claude 3.7 Sonnet (CW)', supportedInputTypes: ['TEXT', 'IMAGE'], maxInputTokens: 200000, maxOutputTokens: 64000 })
     ]
 
-    // 预设模型（GPT 兼容别名）
+    // Kiro 原生 GPT-5.6 模型与旧 GPT 兼容别名
     const presetModels = [
+      buildClientModel({ id: 'gpt-5.6', created: now, ownedBy: 'kiro-proxy', description: 'Alias for the Kiro-native GPT-5.6 Sol model', maxInputTokens: 272000 }),
+      buildClientModel({ id: 'gpt-5.6-sol', created: now, ownedBy: 'kiro-api', description: 'Kiro-native GPT-5.6 Sol model', maxInputTokens: 272000, modelProvider: 'openai' }),
+      buildClientModel({ id: 'gpt-5.6-terra', created: now, ownedBy: 'kiro-api', description: 'Kiro-native GPT-5.6 Terra model', maxInputTokens: 272000, modelProvider: 'openai' }),
+      buildClientModel({ id: 'gpt-5.6-luna', created: now, ownedBy: 'kiro-api', description: 'Kiro-native GPT-5.6 Luna model', maxInputTokens: 272000, modelProvider: 'openai' }),
       buildClientModel({ id: 'gpt-4o', created: now, ownedBy: 'kiro-proxy', description: 'GPT-compatible alias for Kiro' }),
       buildClientModel({ id: 'gpt-4', created: now, ownedBy: 'kiro-proxy', description: 'GPT-compatible alias for Kiro' }),
       buildClientModel({ id: 'gpt-4-turbo', created: now, ownedBy: 'kiro-proxy', description: 'GPT-compatible alias for Kiro' }),
@@ -2663,7 +2667,23 @@ export class ProxyServer {
           'Connection': 'keep-alive'
         })
         const responseId = `resp_${uuidv4()}`
-        res.write(`event: response.created\ndata: ${JSON.stringify({ type: 'response.created', response: { id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000), model: chatRequest.model, output: [] } })}\n\n`)
+        const createdAt = Math.floor(Date.now() / 1000)
+        let sequenceNumber = 0
+        const writeResponseEvent = (type: string, payload: Record<string, unknown>): void => {
+          const event = { type, sequence_number: sequenceNumber++, ...payload }
+          res.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`)
+        }
+        const pendingResponse = {
+          id: responseId,
+          object: 'response',
+          created_at: createdAt,
+          status: 'in_progress',
+          model: chatRequest.model,
+          previous_response_id: responseRequest.previous_response_id ?? null,
+          output: []
+        }
+        writeResponseEvent('response.created', { response: pendingResponse })
+        writeResponseEvent('response.in_progress', { response: pendingResponse })
         const { result, account: usedAccount } = await this.callWithRetry(
           account,
           async (acc) => {
@@ -2679,28 +2699,73 @@ export class ProxyServer {
         const streamedResponse = { ...response, id: responseId }
         streamedResponse.output.forEach((item, outputIndex) => {
           this.throwIfResponseClosed(res, signal)
-          res.write(`event: response.output_item.added\ndata: ${JSON.stringify({ type: 'response.output_item.added', output_index: outputIndex, item })}\n\n`)
+          const pendingItem = item.type === 'message'
+            ? { ...item, status: 'in_progress', content: [] }
+            : { ...item, status: 'in_progress', arguments: '' }
+          writeResponseEvent('response.output_item.added', {
+            response_id: responseId,
+            output_index: outputIndex,
+            item: pendingItem
+          })
           if (item.type === 'message') {
             item.content.forEach((part, contentIndex) => {
               this.throwIfResponseClosed(res, signal)
-              res.write(`event: response.content_part.added\ndata: ${JSON.stringify({ type: 'response.content_part.added', item_id: item.id, output_index: outputIndex, content_index: contentIndex, part: { type: part.type, text: '' } })}\n\n`)
+              writeResponseEvent('response.content_part.added', {
+                response_id: responseId,
+                item_id: item.id,
+                output_index: outputIndex,
+                content_index: contentIndex,
+                part: { type: part.type, text: '', annotations: [] }
+              })
               if (part.text) {
-                res.write(`event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', item_id: item.id, output_index: outputIndex, content_index: contentIndex, delta: part.text })}\n\n`)
+                writeResponseEvent('response.output_text.delta', {
+                  response_id: responseId,
+                  item_id: item.id,
+                  output_index: outputIndex,
+                  content_index: contentIndex,
+                  delta: part.text
+                })
               }
-              res.write(`event: response.output_text.done\ndata: ${JSON.stringify({ type: 'response.output_text.done', item_id: item.id, output_index: outputIndex, content_index: contentIndex, text: part.text })}\n\n`)
-              res.write(`event: response.content_part.done\ndata: ${JSON.stringify({ type: 'response.content_part.done', item_id: item.id, output_index: outputIndex, content_index: contentIndex, part })}\n\n`)
+              writeResponseEvent('response.output_text.done', {
+                response_id: responseId,
+                item_id: item.id,
+                output_index: outputIndex,
+                content_index: contentIndex,
+                text: part.text
+              })
+              writeResponseEvent('response.content_part.done', {
+                response_id: responseId,
+                item_id: item.id,
+                output_index: outputIndex,
+                content_index: contentIndex,
+                part
+              })
             })
           } else {
             if (item.arguments) {
-              res.write(`event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: item.id, output_index: outputIndex, delta: item.arguments })}\n\n`)
+              writeResponseEvent('response.function_call_arguments.delta', {
+                response_id: responseId,
+                item_id: item.id,
+                output_index: outputIndex,
+                delta: item.arguments
+              })
             }
-            res.write(`event: response.function_call_arguments.done\ndata: ${JSON.stringify({ type: 'response.function_call_arguments.done', item_id: item.id, output_index: outputIndex, arguments: item.arguments })}\n\n`)
+            writeResponseEvent('response.function_call_arguments.done', {
+              response_id: responseId,
+              item_id: item.id,
+              output_index: outputIndex,
+              arguments: item.arguments
+            })
           }
           this.throwIfResponseClosed(res, signal)
-          res.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: 'response.output_item.done', output_index: outputIndex, item })}\n\n`)
+          writeResponseEvent('response.output_item.done', {
+            response_id: responseId,
+            output_index: outputIndex,
+            item
+          })
         })
         this.throwIfResponseClosed(res, signal)
-        res.write(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: streamedResponse })}\n\n`)
+        writeResponseEvent('response.completed', { response: streamedResponse })
         res.end()
         this.recordRequestSuccess()
         this.stats.totalTokens += result.usage.inputTokens + result.usage.outputTokens

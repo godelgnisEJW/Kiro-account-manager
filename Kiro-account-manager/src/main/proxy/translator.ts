@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import type {
   OpenAIChatRequest,
   OpenAIMessage,
+  OpenAIContentPart,
   OpenAITool,
   OpenAIChatResponse,
   OpenAIStreamChunk,
@@ -10,6 +11,7 @@ import type {
   OpenAIResponsesResponse,
   OpenAIResponseContentPart,
   OpenAIResponseOutputItem,
+  OpenAIResponseTool,
   ClaudeRequest,
   ClaudeMessage,
   ClaudeResponse,
@@ -52,6 +54,9 @@ function buildThinkingFields(
 ): Record<string, unknown> | undefined {
   // 客户端明确关闭 thinking
   if (clientThinking?.type === 'disabled') return undefined
+  // GPT-5.6 的 reasoning.effort=none 表示不启用推理，不能降级成 Kiro
+  // 模型支持列表里的最高 effort。
+  if (clientReasoningEffort?.toLowerCase() === 'none') return undefined
 
   // 没有模型元数据时，回退到旧逻辑：仅传 { thinking: { type: 'adaptive' } }
   if (!thinkingConfig) {
@@ -130,6 +135,9 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
   }
 
   const messages: OpenAIMessage[] = []
+  const responseTools: OpenAIResponseTool[] = Array.isArray(request.tools)
+    ? [...request.tools]
+    : []
   if (request.instructions) {
     messages.push({ role: 'system', content: request.instructions })
   }
@@ -141,7 +149,9 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
     }
     for (const item of request.input) {
       const itemType = item.type as string | undefined
-      if (itemType === 'function_call_output') {
+      if (itemType === 'additional_tools') {
+        collectAdditionalResponseTools(item, responseTools)
+      } else if (itemType === 'function_call_output') {
         if (!item.call_id) {
           throw new Error('function_call_output requires call_id')
         }
@@ -150,7 +160,7 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
         }
         messages.push({
           role: 'tool',
-          content: item.output,
+          content: stringifyResponseValue(item.output),
           tool_call_id: item.call_id
         })
       } else if (itemType === 'function_call') {
@@ -171,20 +181,51 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
             type: 'function',
             function: {
               name: item.name,
-              arguments: item.arguments
+              arguments: stringifyResponseArguments(item.arguments)
             }
           }]
         })
+      } else if (isResponseToolCallType(itemType)) {
+        messages.push(responseToolCallToMessage(item, itemType))
+      } else if (isResponseToolOutputType(itemType)) {
+        const callId = item.call_id || item.id
+        if (!callId) {
+          console.warn(`[Responses] Skipping ${itemType} without call_id/id`)
+          continue
+        }
+        messages.push({
+          role: 'tool',
+          content: stringifyResponseValue(item.output ?? item.result ?? item.content),
+          tool_call_id: callId
+        })
+      } else if (isStandaloneResponseContentType(itemType)) {
+        messages.push({
+          role: 'user',
+          content: convertResponseInputContent([item as OpenAIResponseContentPart])
+        })
+      } else if (isResponsesStateOnlyItem(itemType)) {
+        // reasoning / item_reference / compaction 等依赖 Responses 服务端状态，
+        // Kiro 没有对等输入项。跳过比伪造成 user 文本更安全。
+        continue
       } else {
         if (itemType !== undefined && itemType !== 'message') {
-          throw new Error(`Unsupported responses input item type: ${itemType}`)
+          console.warn(`[Responses] Skipping unsupported input item type: ${itemType}`)
+          continue
         }
         if (item.content === undefined) {
           throw new Error('message input item requires content')
         }
+        const role = normalizeResponseMessageRole(item.role)
+        if (!role) {
+          console.warn(`[Responses] Skipping message with unsupported role: ${item.role}`)
+          continue
+        }
         messages.push({
-          role: item.role === 'assistant' ? 'assistant' : item.role === 'system' ? 'system' : 'user',
-          content: convertResponseInputContent(item.content)
+          role,
+          content: convertResponseInputContent(item.content),
+          ...(role === 'tool' && (item.call_id || item.id)
+            ? { tool_call_id: item.call_id || item.id }
+            : {})
         })
       }
     }
@@ -198,48 +239,169 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
   if (request.top_p !== undefined) chatRequest.top_p = request.top_p
   if (request.max_output_tokens !== undefined) chatRequest.max_tokens = request.max_output_tokens
   if (request.stream !== undefined) chatRequest.stream = request.stream
-  if (request.tools !== undefined) chatRequest.tools = request.tools
+  const normalizedTools = normalizeResponseTools(responseTools)
+  if (normalizedTools.length > 0) chatRequest.tools = normalizedTools
   const toolChoice = convertResponseToolChoice(request.tool_choice)
   if (toolChoice !== undefined) chatRequest.tool_choice = toolChoice
   if (request.previous_response_id !== undefined) chatRequest.conversation_id = request.previous_response_id
+  const reasoningEffort = extractResponsesReasoningEffort(request.reasoning)
+  if (reasoningEffort !== undefined) chatRequest.reasoning_effort = reasoningEffort
   if (request.metadata !== undefined) chatRequest.metadata = request.metadata
   if (request.kiro_context !== undefined) chatRequest.kiro_context = request.kiro_context
   return chatRequest
 }
 
-function convertResponseInputContent(content: string | OpenAIResponseContentPart[] | undefined): OpenAIMessage['content'] {
+function normalizeResponseMessageRole(role: string | undefined): OpenAIMessage['role'] | undefined {
+  if (!role || role === 'user') return 'user'
+  if (role === 'developer' || role === 'system') return 'system'
+  if (role === 'assistant' || role === 'tool') return role
+  return undefined
+}
+
+function stringifyResponseValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined || value === null) return ''
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function stringifyResponseArguments(value: unknown): string {
+  if (typeof value === 'string') return value
+  return stringifyResponseValue(value === undefined ? {} : value)
+}
+
+function isResponseToolCallType(type: string | undefined): type is string {
+  return !!type && [
+    'custom_tool_call', 'web_search_call', 'file_search_call',
+    'code_interpreter_call', 'computer_call', 'local_shell_call',
+    'image_generation_call', 'mcp_call', 'program'
+  ].includes(type)
+}
+
+function isResponseToolOutputType(type: string | undefined): type is string {
+  return !!type && [
+    'custom_tool_call_output', 'computer_call_output', 'local_shell_call_output',
+    'mcp_approval_response', 'program_output'
+  ].includes(type)
+}
+
+function isStandaloneResponseContentType(type: string | undefined): boolean {
+  return !!type && ['input_text', 'output_text', 'input_image', 'image_url', 'image', 'input_file'].includes(type)
+}
+
+function isResponsesStateOnlyItem(type: string | undefined): boolean {
+  return !!type && [
+    'reasoning', 'item_reference', 'compaction', 'mcp_list_tools',
+    'mcp_approval_request', 'agent_message', 'multi_agent_call',
+    'multi_agent_call_output'
+  ].includes(type)
+}
+
+function responseToolCallToMessage(
+  item: import('./types').OpenAIResponseInputItem,
+  itemType: string
+): OpenAIMessage {
+  const callId = item.call_id || item.id || `call_${uuidv4()}`
+  const name = item.name || itemType
+  const args = item.arguments ?? item.action ?? item.input ?? {}
+  return {
+    role: 'assistant',
+    content: '',
+    tool_calls: [{
+      id: callId,
+      type: 'function',
+      function: { name, arguments: stringifyResponseArguments(args) }
+    }]
+  }
+}
+
+function collectAdditionalResponseTools(
+  item: import('./types').OpenAIResponseInputItem,
+  target: OpenAIResponseTool[]
+): void {
+  for (const candidate of [item.tools, item.additional_tools]) {
+    if (Array.isArray(candidate)) target.push(...candidate)
+  }
+}
+
+function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
+  const byName = new Map<string, OpenAITool>()
+  for (const tool of tools) {
+    if (!tool || typeof tool !== 'object') continue
+    const nested = tool.function && typeof tool.function === 'object' ? tool.function : undefined
+    const name = nested?.name || tool.name
+    const type = tool.type || (name ? 'function' : undefined)
+    if (type !== 'function' || !name) {
+      console.warn(`[Responses] Skipping unsupported tool type: ${type || 'unknown'}`)
+      continue
+    }
+    byName.set(name, {
+      type: 'function',
+      function: {
+        name,
+        description: nested?.description || tool.description || `Tool: ${name}`,
+        parameters: nested?.parameters ?? tool.parameters ?? tool.inputSchema ?? {
+          type: 'object',
+          properties: {}
+        }
+      },
+      ...(tool.cache_control ? { cache_control: tool.cache_control } : {})
+    })
+  }
+  return [...byName.values()]
+}
+
+function extractResponsesReasoningEffort(reasoning: unknown): string | undefined {
+  if (typeof reasoning === 'string') return reasoning
+  if (!reasoning || typeof reasoning !== 'object') return undefined
+  const effort = (reasoning as Record<string, unknown>).effort
+  return typeof effort === 'string' ? effort : undefined
+}
+
+function convertResponseInputContent(content: unknown): OpenAIMessage['content'] {
   if (typeof content === 'string') return content
   if (content === undefined) return ''
   if (!Array.isArray(content)) {
     throw new Error('message content must be a string or an array')
   }
-  return content.map(part => {
+  return content.flatMap<OpenAIContentPart>(partValue => {
+    if (!partValue || typeof partValue !== 'object') return []
+    const part = partValue as OpenAIResponseContentPart
     const partType = part.type as string
-    if (partType === 'input_image') {
-      if (!part.image_url) {
+    if (partType === 'input_image' || partType === 'image_url' || partType === 'image') {
+      const imageUrl = typeof part.image_url === 'string'
+        ? part.image_url
+        : part.image_url?.url || part.url
+      if (!imageUrl) {
         throw new Error('input_image requires image_url')
       }
-      return { type: 'image_url', image_url: { url: part.image_url } }
+      return [{ type: 'image_url' as const, image_url: { url: imageUrl } }]
     }
     if (partType === 'input_file') {
       if (!part.file_data) {
-        throw new Error('input_file requires file_data')
+        console.warn('[Responses] Skipping input_file without inline file_data')
+        return []
       }
-      return {
+      return [{
         type: 'file',
         file: {
           file_data: part.file_data,
           ...(part.filename !== undefined ? { filename: part.filename } : {})
         }
+      }]
+    }
+    if (['input_text', 'output_text', 'text', 'refusal'].includes(partType)) {
+      if (part.text === undefined) {
+        throw new Error(`${partType} requires text`)
       }
+      return [{ type: 'text' as const, text: part.text }]
     }
-    if (partType !== 'input_text' && partType !== 'output_text') {
-      throw new Error(`Unsupported responses content part type: ${partType}`)
-    }
-    if (part.text === undefined) {
-      throw new Error(`${partType} requires text`)
-    }
-    return { type: 'text', text: part.text }
+    // reasoning/summary/encrypted 等内容不应伪造成用户文本；未知 part 也宽容跳过。
+    console.warn(`[Responses] Skipping unsupported content part type: ${partType || 'unknown'}`)
+    return []
   })
 }
 
@@ -262,6 +424,7 @@ export function openAIChatToResponsesResponse(
       return choice.message.tool_calls.map(toolCall => ({
         type: 'function_call' as const,
         id: `fc_${uuidv4()}`,
+        status: 'completed' as const,
         call_id: toolCall.id,
         name: toolCall.function.name,
         arguments: toolCall.function.arguments
@@ -270,10 +433,20 @@ export function openAIChatToResponsesResponse(
     return [{
       type: 'message' as const,
       id: `msg_${uuidv4()}`,
+      status: 'completed' as const,
       role: 'assistant' as const,
-      content: [{ type: 'output_text' as const, text: choice.message.content || '' }]
+      content: [{
+        type: 'output_text' as const,
+        text: choice.message.content || '',
+        annotations: []
+      }]
     }]
   })
+
+  const outputText = output
+    .filter((item): item is Extract<OpenAIResponseOutputItem, { type: 'message' }> => item.type === 'message')
+    .flatMap(item => item.content.map(part => part.text))
+    .join('')
 
   const usage: OpenAIResponsesResponse['usage'] = {
     input_tokens: response.usage.prompt_tokens,
@@ -294,7 +467,9 @@ export function openAIChatToResponsesResponse(
     object: 'response',
     created_at: response.created,
     model: response.model,
+    status: 'completed',
     output,
+    output_text: outputText,
     usage
   }
   if (previousResponseId !== undefined) {

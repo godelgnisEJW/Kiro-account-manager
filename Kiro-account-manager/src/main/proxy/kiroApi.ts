@@ -286,7 +286,17 @@ const MODEL_ID_MAP: Record<string, string> = {
   'claude-3-opus': 'claude-sonnet-4.5',
   'claude-3-sonnet': 'claude-sonnet-4',
   'claude-3-haiku': 'claude-haiku-4.5',
-  // GPT 兼容映射 (映射到 Sonnet 4.5)
+  // GPT-5.6 系列是 Kiro 原生 GPT 模型；无后缀名称作为 Sol 的便捷别名。
+  'gpt-5.6': 'gpt-5.6-sol',
+  'gpt-5.6-sol': 'gpt-5.6-sol',
+  'gpt-5.6-terra': 'gpt-5.6-terra',
+  'gpt-5.6-luna': 'gpt-5.6-luna',
+  // 兼容不允许模型名包含点号的客户端。
+  'gpt-5-6': 'gpt-5.6-sol',
+  'gpt-5-6-sol': 'gpt-5.6-sol',
+  'gpt-5-6-terra': 'gpt-5.6-terra',
+  'gpt-5-6-luna': 'gpt-5.6-luna',
+  // 旧 GPT 名称仍作为 Claude 兼容别名。
   'gpt-4': 'claude-sonnet-4.5',
   'gpt-4o': 'claude-sonnet-4.5',
   'gpt-4-turbo': 'claude-sonnet-4.5',

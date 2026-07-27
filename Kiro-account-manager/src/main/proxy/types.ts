@@ -112,7 +112,9 @@ export interface OpenAIResponsesRequest {
   top_p?: number
   max_output_tokens?: number
   stream?: boolean
-  tools?: OpenAITool[]
+  // Responses API 的 function tool 是扁平结构；部分兼容客户端也会发送
+  // Chat Completions 的嵌套 function 结构，因此在转换层统一归一化。
+  tools?: OpenAIResponseTool[]
   tool_choice?: string | { type: string; name?: string; function?: { name: string } }
   previous_response_id?: string
   reasoning?: unknown
@@ -121,21 +123,43 @@ export interface OpenAIResponsesRequest {
 }
 
 export interface OpenAIResponseInputItem {
-  type?: 'message' | 'function_call' | 'function_call_output'
-  role?: 'system' | 'user' | 'assistant' | 'tool'
-  content?: string | OpenAIResponseContentPart[]
+  // Responses 会在会话回放中加入 reasoning、各类 tool call/output、
+  // item_reference，以及 Codex 的 additional_tools 扩展。
+  type?: string
+  role?: 'system' | 'developer' | 'user' | 'assistant' | 'tool' | string
+  content?: unknown
   call_id?: string
+  id?: string
   name?: string
-  arguments?: string
-  output?: string
+  arguments?: unknown
+  output?: unknown
+  result?: unknown
+  action?: unknown
+  input?: unknown
+  tools?: OpenAIResponseTool[]
+  additional_tools?: OpenAIResponseTool[]
+  [key: string]: unknown
 }
 
 export interface OpenAIResponseContentPart {
-  type: 'input_text' | 'output_text' | 'input_image' | 'input_file'
+  type: string
   text?: string
-  image_url?: string
+  image_url?: string | { url?: string; detail?: string }
+  url?: string
   file_data?: string
   filename?: string
+  [key: string]: unknown
+}
+
+export interface OpenAIResponseTool {
+  type?: string
+  name?: string
+  description?: string
+  parameters?: unknown
+  inputSchema?: unknown
+  function?: OpenAITool['function']
+  cache_control?: ClaudeCacheControl
+  [key: string]: unknown
 }
 
 export interface OpenAIResponsesResponse {
@@ -143,7 +167,9 @@ export interface OpenAIResponsesResponse {
   object: 'response'
   created_at: number
   model: string
+  status: 'completed'
   output: OpenAIResponseOutputItem[]
+  output_text: string
   previous_response_id?: string
   usage: {
     input_tokens: number
@@ -155,8 +181,8 @@ export interface OpenAIResponsesResponse {
 }
 
 export type OpenAIResponseOutputItem =
-  | { type: 'message'; id: string; role: 'assistant'; content: { type: 'output_text'; text: string }[] }
-  | { type: 'function_call'; id: string; call_id: string; name: string; arguments: string }
+  | { type: 'message'; id: string; status: 'completed'; role: 'assistant'; content: { type: 'output_text'; text: string; annotations: unknown[] }[] }
+  | { type: 'function_call'; id: string; status: 'completed'; call_id: string; name: string; arguments: string }
 
 // ============ Claude 兼容格式 ============
 export interface ClaudeRequest {
