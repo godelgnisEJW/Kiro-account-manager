@@ -81,7 +81,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ env.WORKING_DIR }}
-        run: npm ci
+        # cbor-extract has an optional native install script. electron-builder.yml
+        # disables native rebuilds, so skip dependency install scripts in CI too.
+        run: npm ci --ignore-scripts
 
       - name: Build
         working-directory: ${{ env.WORKING_DIR }}
@@ -128,7 +130,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ env.WORKING_DIR }}
-        run: npm ci
+        # cbor-extract has an optional native install script. electron-builder.yml
+        # disables native rebuilds, so skip dependency install scripts in CI too.
+        run: npm ci --ignore-scripts
 
       - name: Build
         working-directory: ${{ env.WORKING_DIR }}
@@ -178,7 +182,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ env.WORKING_DIR }}
-        run: npm ci
+        # cbor-extract has an optional native install script. electron-builder.yml
+        # disables native rebuilds, so skip dependency install scripts in CI too.
+        run: npm ci --ignore-scripts
 
       - name: Build
         working-directory: ${{ env.WORKING_DIR }}
@@ -232,7 +238,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ env.WORKING_DIR }}
-        run: npm ci
+        # cbor-extract has an optional native install script. electron-builder.yml
+        # disables native rebuilds, so skip dependency install scripts in CI too.
+        run: npm ci --ignore-scripts
 
       - name: Build
         working-directory: ${{ env.WORKING_DIR }}
