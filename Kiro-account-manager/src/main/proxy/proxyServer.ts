@@ -2695,13 +2695,15 @@ export class ProxyServer {
         )
         const chatResponse = kiroToOpenaiResponse(result.content, result.toolUses, result.usage, chatRequest.model, toolNameRegistry, result.reasoningContent)
         this.throwIfResponseClosed(res, signal)
-        const response = openAIChatToResponsesResponse(chatResponse, responseRequest.previous_response_id)
+        const response = openAIChatToResponsesResponse(chatResponse, responseRequest.previous_response_id, processedRequest.tools)
         const streamedResponse = { ...response, id: responseId }
         streamedResponse.output.forEach((item, outputIndex) => {
           this.throwIfResponseClosed(res, signal)
           const pendingItem = item.type === 'message'
             ? { ...item, status: 'in_progress', content: [] }
-            : { ...item, status: 'in_progress', arguments: '' }
+            : item.type === 'custom_tool_call'
+              ? { ...item, status: 'in_progress', input: '' }
+              : { ...item, status: 'in_progress', arguments: '' }
           writeResponseEvent('response.output_item.added', {
             response_id: responseId,
             output_index: outputIndex,
@@ -2740,6 +2742,21 @@ export class ProxyServer {
                 content_index: contentIndex,
                 part
               })
+            })
+          } else if (item.type === 'custom_tool_call') {
+            if (item.input) {
+              writeResponseEvent('response.custom_tool_call_input.delta', {
+                response_id: responseId,
+                item_id: item.id,
+                output_index: outputIndex,
+                delta: item.input
+              })
+            }
+            writeResponseEvent('response.custom_tool_call_input.done', {
+              response_id: responseId,
+              item_id: item.id,
+              output_index: outputIndex,
+              input: item.input
             })
           } else {
             if (item.arguments) {
@@ -2792,7 +2809,7 @@ export class ProxyServer {
       )
       const chatResponse = kiroToOpenaiResponse(result.content, result.toolUses, result.usage, chatRequest.model, toolNameRegistry, result.reasoningContent)
       this.throwIfResponseClosed(res, signal)
-      const response = openAIChatToResponsesResponse(chatResponse, responseRequest.previous_response_id)
+      const response = openAIChatToResponsesResponse(chatResponse, responseRequest.previous_response_id, processedRequest.tools)
 
       this.recordRequestSuccess()
       this.stats.totalTokens += result.usage.inputTokens + result.usage.outputTokens

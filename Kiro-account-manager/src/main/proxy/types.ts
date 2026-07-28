@@ -45,6 +45,9 @@ export interface OpenAITool {
     description: string
     parameters: unknown
   }
+  // Responses API custom tools are represented internally as function tools so
+  // Kiro can invoke them, then restored to custom_tool_call in the response.
+  response_tool_type?: 'function' | 'custom'
   cache_control?: ClaudeCacheControl
 }
 
@@ -115,6 +118,8 @@ export interface OpenAIResponsesRequest {
   // Responses API 的 function tool 是扁平结构；部分兼容客户端也会发送
   // Chat Completions 的嵌套 function 结构，因此在转换层统一归一化。
   tools?: OpenAIResponseTool[]
+  // Codex-compatible clients may provide dynamically loaded tools separately.
+  additional_tools?: OpenAIResponseTool[]
   tool_choice?: string | { type: string; name?: string; function?: { name: string } }
   previous_response_id?: string
   reasoning?: unknown
@@ -157,6 +162,7 @@ export interface OpenAIResponseTool {
   description?: string
   parameters?: unknown
   inputSchema?: unknown
+  format?: unknown
   function?: OpenAITool['function']
   cache_control?: ClaudeCacheControl
   [key: string]: unknown
@@ -183,6 +189,7 @@ export interface OpenAIResponsesResponse {
 export type OpenAIResponseOutputItem =
   | { type: 'message'; id: string; status: 'completed'; role: 'assistant'; content: { type: 'output_text'; text: string; annotations: unknown[] }[] }
   | { type: 'function_call'; id: string; status: 'completed'; call_id: string; name: string; arguments: string }
+  | { type: 'custom_tool_call'; id: string; status: 'completed'; call_id: string; name: string; input: string }
 
 // ============ Claude 兼容格式 ============
 export interface ClaudeRequest {

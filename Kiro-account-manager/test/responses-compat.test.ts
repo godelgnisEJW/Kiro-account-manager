@@ -6,6 +6,7 @@ mock.module('electron', () => ({
 }))
 
 const {
+  openaiToKiro,
   openAIChatToResponsesResponse,
   responsesToOpenAIChat
 } = await import('../src/main/proxy/translator')
@@ -115,6 +116,102 @@ describe('OpenAI Responses compatibility', () => {
       'flat',
       'mcp_style'
     ])
+  })
+
+  test('preserves Codex custom tools and custom tool replay', () => {
+    const converted = responsesToOpenAIChat({
+      model: 'gpt-5.6-sol',
+      input: [
+        { type: 'message', role: 'user', content: 'Edit the file.' },
+        {
+          type: 'custom_tool_call',
+          call_id: 'call_patch',
+          name: 'apply_patch',
+          input: '*** Begin Patch\n*** End Patch'
+        },
+        {
+          type: 'custom_tool_call_output',
+          call_id: 'call_patch',
+          output: 'Done!'
+        }
+      ],
+      tools: [{
+        type: 'custom',
+        name: 'apply_patch',
+        description: 'Apply a patch to files in the workspace.',
+        format: { type: 'grammar', syntax: 'lark', definition: 'start: /.+/' }
+      }],
+      additional_tools: [{
+        type: 'function',
+        name: 'exec_command',
+        description: 'Run a terminal command.',
+        parameters: {
+          type: 'object',
+          properties: { cmd: { type: 'string' } },
+          required: ['cmd']
+        }
+      }]
+    })
+
+    expect(converted.tools?.map(tool => tool.function.name)).toEqual([
+      'apply_patch',
+      'exec_command'
+    ])
+    expect(converted.tools?.[0]).toMatchObject({
+      response_tool_type: 'custom',
+      function: {
+        parameters: {
+          properties: { input: { type: 'string' } },
+          required: ['input']
+        }
+      }
+    })
+    expect(converted.messages[1].tool_calls?.[0].function.arguments).toBe(
+      '{"input":"*** Begin Patch\\n*** End Patch"}'
+    )
+    expect(converted.messages[2]).toMatchObject({
+      role: 'tool',
+      tool_call_id: 'call_patch',
+      content: 'Done!'
+    })
+
+    const kiroPayload = openaiToKiro(converted)
+    const kiroTools = kiroPayload.conversationState.currentMessage.userInputMessage
+      .userInputMessageContext?.tools || []
+    expect(kiroTools.flatMap(tool => 'toolSpecification' in tool
+      ? [tool.toolSpecification.name]
+      : [])).toEqual(['apply_patch', 'exec_command'])
+
+    const response = openAIChatToResponsesResponse({
+      id: 'chatcmpl_custom',
+      object: 'chat.completion',
+      created: 123,
+      model: 'gpt-5.6-sol',
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'call_patch_2',
+            type: 'function',
+            function: {
+              name: 'apply_patch',
+              arguments: '{"input":"*** Begin Patch\\n*** End Patch"}'
+            }
+          }]
+        },
+        finish_reason: 'tool_calls'
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 }
+    }, undefined, converted.tools)
+
+    expect(response.output[0]).toMatchObject({
+      type: 'custom_tool_call',
+      call_id: 'call_patch_2',
+      name: 'apply_patch',
+      input: '*** Begin Patch\n*** End Patch'
+    })
   })
 
   test('returns completed Responses objects with output_text', () => {

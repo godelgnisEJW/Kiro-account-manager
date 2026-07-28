@@ -135,9 +135,10 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
   }
 
   const messages: OpenAIMessage[] = []
-  const responseTools: OpenAIResponseTool[] = Array.isArray(request.tools)
-    ? [...request.tools]
-    : []
+  const responseTools: OpenAIResponseTool[] = [
+    ...(Array.isArray(request.tools) ? request.tools : []),
+    ...(Array.isArray(request.additional_tools) ? request.additional_tools : [])
+  ]
   if (request.instructions) {
     messages.push({ role: 'system', content: request.instructions })
   }
@@ -306,7 +307,9 @@ function responseToolCallToMessage(
 ): OpenAIMessage {
   const callId = item.call_id || item.id || `call_${uuidv4()}`
   const name = item.name || itemType
-  const args = item.arguments ?? item.action ?? item.input ?? {}
+  const args = itemType === 'custom_tool_call'
+    ? { input: stringifyResponseValue(item.input) }
+    : item.arguments ?? item.action ?? item.input ?? {}
   return {
     role: 'assistant',
     content: '',
@@ -334,20 +337,34 @@ function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
     const nested = tool.function && typeof tool.function === 'object' ? tool.function : undefined
     const name = nested?.name || tool.name
     const type = tool.type || (name ? 'function' : undefined)
-    if (type !== 'function' || !name) {
+    if (!name || (type !== 'function' && type !== 'custom')) {
       console.warn(`[Responses] Skipping unsupported tool type: ${type || 'unknown'}`)
       continue
     }
+    const parameters = type === 'custom'
+      ? {
+          type: 'object',
+          properties: {
+            input: {
+              type: 'string',
+              description: 'Free-form input for this custom tool.'
+            }
+          },
+          required: ['input'],
+          additionalProperties: false
+        }
+      : nested?.parameters ?? tool.parameters ?? tool.inputSchema ?? {
+          type: 'object',
+          properties: {}
+        }
     byName.set(name, {
       type: 'function',
       function: {
         name,
         description: nested?.description || tool.description || `Tool: ${name}`,
-        parameters: nested?.parameters ?? tool.parameters ?? tool.inputSchema ?? {
-          type: 'object',
-          properties: {}
-        }
+        parameters
       },
+      response_tool_type: type,
       ...(tool.cache_control ? { cache_control: tool.cache_control } : {})
     })
   }
@@ -408,7 +425,7 @@ function convertResponseInputContent(content: unknown): OpenAIMessage['content']
 function convertResponseToolChoice(toolChoice: OpenAIResponsesRequest['tool_choice']): OpenAIChatRequest['tool_choice'] {
   if (!toolChoice || typeof toolChoice === 'string') return toolChoice
   if (toolChoice.type === 'none' || toolChoice.type === 'auto') return toolChoice.type
-  if (toolChoice.type === 'function' && toolChoice.name) {
+  if ((toolChoice.type === 'function' || toolChoice.type === 'custom') && toolChoice.name) {
     return { type: 'function', function: { name: toolChoice.name } }
   }
   if (toolChoice.function?.name) return { type: 'function', function: { name: toolChoice.function.name } }
@@ -417,18 +434,36 @@ function convertResponseToolChoice(toolChoice: OpenAIResponsesRequest['tool_choi
 
 export function openAIChatToResponsesResponse(
   response: OpenAIChatResponse,
-  previousResponseId?: string
+  previousResponseId?: string,
+  tools?: OpenAITool[]
 ): OpenAIResponsesResponse {
+  const customToolNames = new Set(
+    tools
+      ?.filter(tool => tool.response_tool_type === 'custom')
+      .map(tool => tool.function.name) || []
+  )
   const output: OpenAIResponseOutputItem[] = response.choices.flatMap<OpenAIResponseOutputItem>(choice => {
     if (choice.message.tool_calls?.length) {
-      return choice.message.tool_calls.map(toolCall => ({
-        type: 'function_call' as const,
-        id: `fc_${uuidv4()}`,
-        status: 'completed' as const,
-        call_id: toolCall.id,
-        name: toolCall.function.name,
-        arguments: toolCall.function.arguments
-      }))
+      return choice.message.tool_calls.map(toolCall => {
+        if (customToolNames.has(toolCall.function.name)) {
+          return {
+            type: 'custom_tool_call' as const,
+            id: `ctc_${uuidv4()}`,
+            status: 'completed' as const,
+            call_id: toolCall.id,
+            name: toolCall.function.name,
+            input: extractCustomToolInput(toolCall.function.arguments)
+          }
+        }
+        return {
+          type: 'function_call' as const,
+          id: `fc_${uuidv4()}`,
+          status: 'completed' as const,
+          call_id: toolCall.id,
+          name: toolCall.function.name,
+          arguments: toolCall.function.arguments
+        }
+      })
     }
     return [{
       type: 'message' as const,
@@ -476,6 +511,19 @@ export function openAIChatToResponsesResponse(
     responsesResponse.previous_response_id = previousResponseId
   }
   return responsesResponse
+}
+
+function extractCustomToolInput(argumentsJson: string): string {
+  try {
+    const parsed = JSON.parse(argumentsJson) as unknown
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { input?: unknown }).input === 'string') {
+      return (parsed as { input: string }).input
+    }
+    if (typeof parsed === 'string') return parsed
+  } catch {
+    // Kiro may occasionally return the custom tool input as raw text.
+  }
+  return argumentsJson
 }
 
 // ============ OpenAI -> Kiro 转换 ============
