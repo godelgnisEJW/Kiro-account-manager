@@ -1,11 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, type ReactElement } from 'react'
 import { useAccountsStore, isBannedAccountError } from '@/store/accounts'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui'
-import { Users, CheckCircle, AlertTriangle, Clock, Zap, Shield, Fingerprint, FolderPlus, Tag, TrendingUp, Activity, BarChart3, Ban, ChevronRight } from 'lucide-react'
+import { Users, CheckCircle, AlertTriangle, Clock, Zap, Shield, Fingerprint, FolderPlus, Tag, Ban, ChevronRight } from 'lucide-react'
 import kiroLogo from '@/assets/kiro-high-resolution-logo-transparent.png'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
 import type { Account, AccountFilter } from '@/types/account'
+import { UsageAnalytics } from '../home/UsageAnalytics'
 
 // 额度告急阈值（usage.percentUsed 为 0-1 小数）
 const QUOTA_WARN_RATIO = 0.9
@@ -25,7 +26,7 @@ const getSubscriptionColor = (type: string, title?: string): string => {
   return 'bg-gray-500'
 }
 
-export function HomePage() {
+export function HomePage(): ReactElement {
   const { accounts, activeAccountId, getStats, darkMode, usagePrecision, setFilter, setActiveGroupTab } = useAccountsStore()
   const { t } = useTranslation()
   const stats = getStats()
@@ -55,37 +56,6 @@ export function HomePage() {
     setFilter(patch)
     window.dispatchEvent(new CustomEvent('navigate-page', { detail: 'accounts' }))
   }
-
-  // 计算额度统计
-  const usageStats = useMemo(() => {
-    let totalLimit = 0
-    let totalUsed = 0
-    let validAccountCount = 0
-
-    Array.from(accounts.values()).forEach(account => {
-      // 只统计正常状态的账号
-      if (account.status === 'active' && account.usage) {
-        const limit = account.usage.limit ?? 0
-        const used = account.usage.current ?? 0
-        if (limit > 0) {
-          totalLimit += limit
-          totalUsed += used
-          validAccountCount++
-        }
-      }
-    })
-
-    const remaining = totalLimit - totalUsed
-    const percentUsed = totalLimit > 0 ? (totalUsed / totalLimit) * 100 : 0
-
-    return {
-      totalLimit,
-      totalUsed,
-      remaining,
-      percentUsed,
-      validAccountCount
-    }
-  }, [accounts])
 
   const isEn = t('common.unknown') === 'Unknown'
   const statCards = [
@@ -243,129 +213,8 @@ export function HomePage() {
         </Card>
       )}
 
-      {/* Usage Stats */}
-      {usageStats.validAccountCount > 0 && (
-        <Card className="hover-lift">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <BarChart3 className="h-4 w-4 text-primary" />
-              </div>
-              {isEn ? 'Usage Stats' : '额度统计'}
-              <span className="text-xs font-normal text-muted-foreground">
-                ({isEn ? `Based on ${usageStats.validAccountCount} valid accounts` : `基于 ${usageStats.validAccountCount} 个有效账号`})
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-              <div className="p-3 bg-muted rounded-lg">
-                <div className="flex items-center gap-2 mb-1">
-                  <TrendingUp className="h-4 w-4 text-blue-500" />
-                  <span className="text-xs text-muted-foreground">{isEn ? 'Total' : '总额度'}</span>
-                </div>
-                <p className="text-xl font-bold">{usageStats.totalLimit.toLocaleString()}</p>
-              </div>
-              <div className="p-3 bg-muted rounded-lg">
-                <div className="flex items-center gap-2 mb-1">
-                  <Activity className="h-4 w-4 text-orange-500" />
-                  <span className="text-xs text-muted-foreground">{isEn ? 'Used' : '已使用'}</span>
-                </div>
-                <p className="text-xl font-bold">{usageStats.totalUsed.toLocaleString()}</p>
-              </div>
-              <div className="p-3 bg-muted rounded-lg">
-                <div className="flex items-center gap-2 mb-1">
-                  <Zap className="h-4 w-4 text-green-500" />
-                  <span className="text-xs text-muted-foreground">{isEn ? 'Remaining' : '剩余额度'}</span>
-                </div>
-                <p className="text-xl font-bold text-green-600">{usageStats.remaining.toLocaleString()}</p>
-              </div>
-              <div className="p-3 bg-muted rounded-lg">
-                <div className="flex items-center gap-2 mb-1">
-                  <BarChart3 className="h-4 w-4 text-purple-500" />
-                  <span className="text-xs text-muted-foreground">{isEn ? 'Usage %' : '使用率'}</span>
-                </div>
-                <p className="text-xl font-bold">{usageStats.percentUsed.toFixed(usagePrecision ? 2 : 1)}%</p>
-              </div>
-            </div>
-            {/* 进度条 - 超额时双段显示 */}
-            {(() => {
-              const isOverQuota = usageStats.percentUsed > 100
-              const overPercent = isOverQuota ? usageStats.percentUsed - 100 : 0
-              const overAmount = isOverQuota ? Math.abs(usageStats.remaining) : 0
-              // 超额段视觉宽度：按超额比例占整条进度条比例，最多 60% 避免完全遮盖
-              const overBarWidth = isOverQuota ? Math.min((overPercent / usageStats.percentUsed) * 100, 60) : 0
-              const precision = usagePrecision ? 2 : 1
-
-              return (
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center text-xs">
-                    <span className="text-muted-foreground">{isEn ? 'Overall Progress' : '总体使用进度'}</span>
-                    <span className="flex items-center gap-2">
-                      <span className="text-muted-foreground">
-                        {usageStats.totalUsed.toLocaleString(undefined, { maximumFractionDigits: 2 })} / {usageStats.totalLimit.toLocaleString()}
-                      </span>
-                      <span className={cn(
-                        "font-bold px-2 py-0.5 rounded-md",
-                        isOverQuota && "bg-red-500/15 text-red-600 dark:text-red-400",
-                        !isOverQuota && usageStats.percentUsed >= 80 && "bg-orange-500/15 text-orange-600 dark:text-orange-400",
-                        !isOverQuota && usageStats.percentUsed >= 50 && usageStats.percentUsed < 80 && "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400",
-                        !isOverQuota && usageStats.percentUsed < 50 && "bg-green-500/15 text-green-600 dark:text-green-400"
-                      )}>
-                        {usageStats.percentUsed.toFixed(precision)}%
-                      </span>
-                    </span>
-                  </div>
-                  <div className="relative h-3 bg-muted rounded-full overflow-hidden">
-                    {/* 基础进度段 */}
-                    <div 
-                      className={cn(
-                        "absolute inset-y-0 left-0 transition-all",
-                        isOverQuota && "bg-red-500",
-                        !isOverQuota && usageStats.percentUsed >= 80 && "bg-orange-500",
-                        !isOverQuota && usageStats.percentUsed >= 50 && usageStats.percentUsed < 80 && "bg-yellow-500",
-                        !isOverQuota && usageStats.percentUsed < 50 && "bg-green-500"
-                      )}
-                      style={{ width: `${Math.min(usageStats.percentUsed, 100)}%` }}
-                    />
-                    {/* 超额段 - 深红条纹动画从右侧叠加 */}
-                    {isOverQuota && (
-                      <div 
-                        className="absolute inset-y-0 right-0 bg-gradient-to-r from-red-600 via-red-700 to-red-800 animate-pulse"
-                        style={{
-                          width: `${overBarWidth}%`,
-                          backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.15) 0, rgba(255,255,255,0.15) 8px, transparent 8px, transparent 16px)',
-                          backgroundSize: '22px 22px'
-                        }}
-                      />
-                    )}
-                  </div>
-                  {/* 超额警示横幅 */}
-                  {isOverQuota && (
-                    <div className="flex items-center justify-between gap-3 mt-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30">
-                      <div className="flex items-center gap-2 text-xs">
-                        <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
-                        <span className="font-bold text-red-600 dark:text-red-400">
-                          {isEn ? 'Over Quota' : '已超额'}
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-600 dark:text-red-400 font-bold">
-                          +{overPercent.toFixed(precision)}%
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <span className="text-muted-foreground">{isEn ? 'Excess: ' : '超额积分：'}</span>
-                        <span className="font-bold text-red-600 dark:text-red-400">
-                          {overAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-          </CardContent>
-        </Card>
-      )}
+      {/* Monthly quota analytics */}
+      <UsageAnalytics accounts={accounts} usagePrecision={usagePrecision} isEn={isEn} />
 
       {/* Current Account */}
       {activeAccount && (

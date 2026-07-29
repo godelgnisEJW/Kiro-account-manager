@@ -23,6 +23,7 @@ import type {
 } from '../types/proxy'
 import { DEFAULT_PROXY_POOL_CONFIG } from '../types/proxy'
 import { useWebhookStore, type WebhookEvent, type WebhookMessage } from './webhooks'
+import { captureUsageSnapshot } from '../lib/usageHistory'
 
 // ============================================
 // 账号管理 Store
@@ -167,7 +168,7 @@ async function syncLocalSsoAccountAsync(
         upgradeCapability: verifyResult.data.subscription?.upgradeCapability,
         overageCapability: verifyResult.data.subscription?.overageCapability
       },
-      usage: {
+      usage: captureUsageSnapshot({
         current: verifyResult.data.usage.current,
         limit: verifyResult.data.usage.limit,
         percentUsed: verifyResult.data.usage.limit > 0
@@ -182,7 +183,7 @@ async function syncLocalSsoAccountAsync(
         bonuses: verifyResult.data.usage.bonuses,
         nextResetDate: verifyResult.data.usage.nextResetDate,
         resourceDetail: verifyResult.data.usage.resourceDetail
-      },
+      }, now),
       status: 'active',
       createdAt: now,
       lastUsedAt: now,
@@ -605,6 +606,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     const account: Account = {
       ...accountData,
+      usage: captureUsageSnapshot(accountData.usage, now),
       id,
       machineId,
       createdAt: now,
@@ -628,7 +630,14 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const accounts = new Map(state.accounts)
       const account = accounts.get(id)
       if (account) {
-        accounts.set(id, { ...account, ...updates })
+        const usage = updates.usage
+          ? captureUsageSnapshot(
+              updates.usage,
+              updates.usage.lastUpdated || Date.now(),
+              account.usage.history
+            )
+          : account.usage
+        accounts.set(id, { ...account, ...updates, usage })
       }
       return { accounts }
     })
@@ -1478,7 +1487,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
             // 合并 usage 数据，确保包含所有必要字段
             const apiUsage = result.data!.usage
-            const mergedUsage = apiUsage ? {
+            const mergedUsage = apiUsage ? captureUsageSnapshot({
               current: apiUsage.current ?? acc.usage.current,
               limit: apiUsage.limit ?? acc.usage.limit,
               percentUsed: apiUsage.limit > 0 ? apiUsage.current / apiUsage.limit : 0,
@@ -1491,7 +1500,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
               bonuses: apiUsage.bonuses,
               nextResetDate: apiUsage.nextResetDate,
               resourceDetail: apiUsage.resourceDetail
-            } : acc.usage
+            }, apiUsage.lastUpdated ?? Date.now(), acc.usage.history) : acc.usage
 
             // 合并订阅信息
             const apiSub = result.data!.subscription
@@ -1690,6 +1699,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             accounts.set(id, account)
             needsSave = true
             console.log(`[Store] Generated machineId for account ${account.email}: ${account.machineId.substring(0, 16)}...`)
+          }
+
+          // 启动时补记当天快照，并自动清理上一个自然月的数据。
+          // 这样即使当天没有主动刷新额度，首页也能从当前值开始累计趋势。
+          const usage = captureUsageSnapshot(
+            account.usage,
+            Date.now(),
+            account.usage.history
+          )
+          if (usage !== account.usage) {
+            accounts.set(id, { ...account, usage })
+            needsSave = true
           }
         }
 
@@ -2523,7 +2544,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         usage: refreshData?.usage ? (() => {
           const newCurrent = refreshData.usage.current ?? account.usage.current
           const newLimit = refreshData.usage.limit ?? account.usage.limit
-          return {
+          return captureUsageSnapshot({
             ...account.usage,
             current: newCurrent,
             limit: newLimit,
@@ -2537,7 +2558,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             nextResetDate: refreshData.usage.nextResetDate ?? account.usage.nextResetDate,
             resourceDetail: refreshData.usage.resourceDetail ?? account.usage.resourceDetail,
             lastUpdated: now
-          }
+          }, now, account.usage.history)
         })() : account.usage,
         subscription: refreshData?.subscription ? {
           ...account.subscription,
@@ -2632,7 +2653,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         usage: checkData?.usage ? (() => {
           const newCurrent = checkData.usage.current ?? account.usage.current
           const newLimit = checkData.usage.limit ?? account.usage.limit
-          return {
+          return captureUsageSnapshot({
             ...account.usage,
             current: newCurrent,
             limit: newLimit,
@@ -2646,7 +2667,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             nextResetDate: checkData.usage.nextResetDate ?? account.usage.nextResetDate,
             resourceDetail: checkData.usage.resourceDetail ?? account.usage.resourceDetail,
             lastUpdated: now
-          }
+          }, now, account.usage.history)
         })() : account.usage,
         subscription: checkData?.subscription ? {
           ...account.subscription,

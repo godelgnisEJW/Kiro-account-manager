@@ -36,6 +36,14 @@ export interface BonusUsage {
   expiresAt?: string
 }
 
+/** 当前自然月内某一天最后一次额度观测 */
+export interface UsageSnapshot {
+  date: string // 本地日期 YYYY-MM-DD
+  timestamp: number
+  current: number
+  limit: number
+}
+
 /**
  * 账号使用量信息
  */
@@ -53,6 +61,7 @@ export interface AccountUsage {
   bonuses?: BonusUsage[]  // 奖励额度列表
   nextResetDate?: string  // 重置日期
   resourceDetail?: ResourceDetail // 资源详情
+  history?: UsageSnapshot[] // 当前月每日额度快照
 }
 
 /**
