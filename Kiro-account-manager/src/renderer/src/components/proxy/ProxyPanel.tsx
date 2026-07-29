@@ -103,10 +103,21 @@ interface ProxyConfig {
 }
 
 // 反代请求日志：模块级持久化 + 单次订阅，避免切到其它页面 unmount 后日志清空、中间请求事件丢失
-type RecentLogEntry = { time: string; path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }
+type RecentLogEntry = { time: string; path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }
 let _proxyRecentLogs: RecentLogEntry[] = []
+let _proxyRecentLogsLimit = 100
 let _refSetProxyRecentLogs: ((v: RecentLogEntry[]) => void) | null = null
 let _proxyResponseListenerRegistered = false
+function normalizeRecentLogsLimit(value?: number): number {
+  return Math.min(10000, Math.max(20, value || 100))
+}
+function setProxyRecentLogsLimit(value?: number): void {
+  _proxyRecentLogsLimit = normalizeRecentLogsLimit(value)
+  if (_proxyRecentLogs.length > _proxyRecentLogsLimit) {
+    _proxyRecentLogs = _proxyRecentLogs.slice(0, _proxyRecentLogsLimit)
+    _refSetProxyRecentLogs?.(_proxyRecentLogs)
+  }
+}
 function ensureProxyResponseListenerRegistered(): void {
   if (_proxyResponseListenerRegistered) return
   _proxyResponseListenerRegistered = true
@@ -129,11 +140,12 @@ function ensureProxyResponseListenerRegistered(): void {
       inputTokens: info.inputTokens,
       outputTokens: info.outputTokens,
       cacheReadTokens: info.cacheReadTokens,
+      cacheWriteTokens: info.cacheWriteTokens,
       reasoningTokens: info.reasoningTokens,
       credits: info.credits,
       responseTime: info.responseTime,
       error: info.error
-    }, ..._proxyRecentLogs.slice(0, 99)]
+    }, ..._proxyRecentLogs.slice(0, _proxyRecentLogsLimit - 1)]
     _refSetProxyRecentLogs?.(_proxyRecentLogs)
   })
 }
@@ -227,6 +239,7 @@ export function ProxyPanel() {
           cfg.selectedAccountId = cfg.selectedAccountIds[0]
         }
         const clientDrivenToolExecution = cfg.clientDrivenToolExecution !== false
+        setProxyRecentLogsLimit(cfg.recentRequestsLimit)
         setConfig({
           ...cfg,
           clientDrivenToolExecution
@@ -390,7 +403,9 @@ export function ProxyPanel() {
   useEffect(() => {
     window.api.proxyLoadLogs().then(result => {
       if (result.success && result.logs.length > 0) {
-        setRecentLogs(result.logs)
+        // main 进程已按当前 recentRequestsLimit 截断，避免配置尚未加载时误用默认 100
+        _proxyRecentLogs = result.logs
+        setRecentLogs(_proxyRecentLogs)
       }
     })
   }, [])
@@ -1114,6 +1129,7 @@ export function ProxyPanel() {
         setConfig={setConfig as unknown as Parameters<typeof ProxySecurityPanel>[0]['setConfig']}
         isRunning={isRunning}
         isEn={isEn}
+        onRecentRequestsLimitChange={setProxyRecentLogsLimit}
       />
 
       {/* 统计卡片 */}
@@ -1393,7 +1409,14 @@ export function ProxyPanel() {
                   <span className={`text-center ${log.status >= 400 ? 'text-destructive' : 'text-success'}`}>{log.status}</span>
                   <span className="text-muted-foreground text-right">{log.inputTokens ? log.inputTokens.toLocaleString() : '-'}</span>
                   <span className="text-muted-foreground text-right">{log.outputTokens ? log.outputTokens.toLocaleString() : '-'}</span>
-                  <span className="text-success text-right">{log.cacheReadTokens ? log.cacheReadTokens.toLocaleString() : '-'}</span>
+                  <span
+                    className="text-success text-right"
+                    title={`${isEn ? 'Cache read' : '缓存读取'}: ${(log.cacheReadTokens || 0).toLocaleString()} · ${isEn ? 'Cache write' : '缓存写入'}: ${(log.cacheWriteTokens || 0).toLocaleString()}`}
+                  >
+                    {log.cacheReadTokens || log.cacheWriteTokens
+                      ? `${(log.cacheReadTokens || 0).toLocaleString()} / ${(log.cacheWriteTokens || 0).toLocaleString()}`
+                      : '-'}
+                  </span>
                   <span className="text-muted-foreground text-right">{log.credits ? log.credits.toFixed(4) : '-'}</span>
                   <span className="text-muted-foreground text-right">{log.responseTime ? `${(log.responseTime / 1000).toFixed(1)}s` : '-'}</span>
                 </div>
@@ -1459,6 +1482,7 @@ export function ProxyPanel() {
         totalCredits={stats?.totalCredits || 0}
         totalTokens={(stats?.inputTokens || 0) + (stats?.outputTokens || 0)}
         onClearLogs={() => {
+          _proxyRecentLogs = []
           setRecentLogs([])
           window.api.proxySaveLogs([])
         }}

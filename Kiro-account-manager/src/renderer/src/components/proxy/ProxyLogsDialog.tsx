@@ -11,6 +11,7 @@ interface LogEntry {
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number
+  cacheWriteTokens?: number
   reasoningTokens?: number
   credits?: number
   responseTime?: number
@@ -45,9 +46,14 @@ export function ProxyLogsDialog({
   if (!open) return null
 
   const handleExport = () => {
-    const content = logs.map(log => 
-      `${log.time}\t${log.path}\t${log.status}${log.credits ? `\t${log.credits.toFixed(6)} credits` : ''}`
-    ).join('\n')
+    const content = [
+      'time\tpath\tmodel\tstatus\tinput_tokens\toutput_tokens\tcache_read_tokens\tcache_write_tokens\treasoning_tokens\tcredits\tresponse_time_ms\terror',
+      ...logs.map(log => [
+        log.time, log.path, log.model || '', log.status, log.inputTokens || 0, log.outputTokens || 0,
+        log.cacheReadTokens || 0, log.cacheWriteTokens || 0, log.reasoningTokens || 0,
+        log.credits || 0, log.responseTime || 0, (log.error || '').replace(/[\r\n\t]+/g, ' ')
+      ].join('\t'))
+    ].join('\n')
     const blob = new Blob([content], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -125,7 +131,7 @@ export function ProxyLogsDialog({
                     <th className="text-center p-2 font-medium">{isEn ? 'Status' : '状态'}</th>
                     <th className="text-center p-2 font-medium">{isEn ? 'In' : '输入'}</th>
                     <th className="text-center p-2 font-medium">{isEn ? 'Out' : '输出'}</th>
-                    <th className="text-center p-2 font-medium">Cache</th>
+                    <th className="text-center p-2 font-medium">{isEn ? 'Cache R / W' : '缓存读 / 写'}</th>
                     <th className="text-right p-2 font-medium">Credits</th>
                     <th className="text-right p-2 font-medium">{isEn ? 'Time' : '耗时'}</th>
                   </tr>
@@ -167,7 +173,14 @@ export function ProxyLogsDialog({
                       </td>
                       <td className="p-2 text-center text-muted-foreground">{log.inputTokens ? log.inputTokens.toLocaleString() : '-'}</td>
                       <td className="p-2 text-center text-muted-foreground">{log.outputTokens ? log.outputTokens.toLocaleString() : '-'}</td>
-                      <td className="p-2 text-center text-success">{log.cacheReadTokens ? log.cacheReadTokens.toLocaleString() : '-'}</td>
+                      <td
+                        className="p-2 text-center text-success whitespace-nowrap"
+                        title={`${isEn ? 'Cache read' : '缓存读取'}: ${(log.cacheReadTokens || 0).toLocaleString()} · ${isEn ? 'Cache write' : '缓存写入'}: ${(log.cacheWriteTokens || 0).toLocaleString()}`}
+                      >
+                        {log.cacheReadTokens || log.cacheWriteTokens
+                          ? `${(log.cacheReadTokens || 0).toLocaleString()} / ${(log.cacheWriteTokens || 0).toLocaleString()}`
+                          : '-'}
+                      </td>
                       <td className="p-2 text-right text-muted-foreground">{log.credits ? log.credits.toFixed(6) : '-'}</td>
                       <td className="p-2 text-right text-muted-foreground">{log.responseTime ? `${(log.responseTime / 1000).toFixed(1)}s` : '-'}</td>
                     </tr>

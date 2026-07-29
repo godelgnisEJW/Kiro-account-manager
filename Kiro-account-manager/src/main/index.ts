@@ -6585,14 +6585,18 @@ app.whenReady().then(async () => {
 
   // 代理日志持久化（请求日志，与详细日志分开存储）
   const getProxyLogsPath = (): string => join(app.getPath('userData'), 'proxy-request-logs.json')
-  const MAX_LOGS = 100
+  const getProxyRequestLogsLimit = (): number => {
+    const savedConfig = store?.get('proxyConfig') as ProxyConfig | undefined
+    const configuredLimit = proxyServer?.getConfig().recentRequestsLimit ?? savedConfig?.recentRequestsLimit ?? 100
+    return Math.min(10000, Math.max(20, configuredLimit))
+  }
 
   // IPC: 保存代理日志
-  ipcMain.handle('proxy-save-logs', async (_event, logs: Array<{ time: string; path: string; status: number; tokens?: number }>) => {
+  ipcMain.handle('proxy-save-logs', async (_event, logs: Array<{ time: string; path: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }>) => {
     try {
       const logsPath = getProxyLogsPath()
-      // 只保留最近 100 条
-      const trimmedLogs = logs.slice(0, MAX_LOGS)
+      // 与反代配置中的 recentRequestsLimit 保持一致，避免 UI 配置大于 100 时仍被硬截断
+      const trimmedLogs = logs.slice(0, getProxyRequestLogsLimit())
       await writeFile(logsPath, JSON.stringify(trimmedLogs, null, 2), 'utf-8')
       return { success: true }
     } catch (error) {
@@ -6607,7 +6611,10 @@ app.whenReady().then(async () => {
       const logsPath = getProxyLogsPath()
       const content = await readFile(logsPath, 'utf-8')
       const logs = JSON.parse(content)
-      return { success: true, logs }
+      return {
+        success: true,
+        logs: Array.isArray(logs) ? logs.slice(0, getProxyRequestLogsLimit()) : []
+      }
     } catch (error) {
       // 文件不存在是正常的
       return { success: true, logs: [] }

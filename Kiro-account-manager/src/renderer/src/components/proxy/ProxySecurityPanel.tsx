@@ -45,9 +45,10 @@ interface ProxySecurityPanelProps {
   setConfig: React.Dispatch<React.SetStateAction<unknown>>
   isRunning: boolean
   isEn: boolean
+  onRecentRequestsLimitChange?: (limit: number) => void
 }
 
-export function ProxySecurityPanel({ config, setConfig, isRunning, isEn }: ProxySecurityPanelProps): React.ReactNode {
+export function ProxySecurityPanel({ config, setConfig, isRunning, isEn, onRecentRequestsLimitChange }: ProxySecurityPanelProps): React.ReactNode {
   const [expanded, setExpanded] = useState(false)
   const [showAudit, setShowAudit] = useState(false)
   const [showCert, setShowCert] = useState(false)
@@ -313,7 +314,11 @@ export function ProxySecurityPanel({ config, setConfig, isRunning, isEn }: Proxy
                 max={10000}
                 step={50}
                 value={config.recentRequestsLimit || 100}
-                onChange={(e) => updateConfig('recentRequestsLimit', parseInt(e.target.value) || 100)}
+                onChange={(e) => {
+                  const limit = Math.min(10000, Math.max(20, parseInt(e.target.value) || 100))
+                  updateConfig('recentRequestsLimit', limit)
+                  onRecentRequestsLimitChange?.(limit)
+                }}
                 className="h-9"
               />
               <p className="text-xs text-muted-foreground mt-1">{isEn ? 'Default 100, max 10000' : '默认 100，上限 10000'}</p>

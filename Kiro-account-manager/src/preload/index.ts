@@ -768,12 +768,12 @@ const api = {
   },
 
   // 保存代理日志
-  proxySaveLogs: (logs: Array<{ time: string; path: string; status: number; tokens?: number }>): Promise<{ success: boolean; error?: string }> => {
+  proxySaveLogs: (logs: Array<{ time: string; path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }>): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('proxy-save-logs', logs)
   },
 
   // 加载代理日志
-  proxyLoadLogs: (): Promise<{ success: boolean; logs: Array<{ time: string; path: string; status: number; tokens?: number }> }> => {
+  proxyLoadLogs: (): Promise<{ success: boolean; logs: Array<{ time: string; path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }> }> => {
     return ipcRenderer.invoke('proxy-load-logs')
   },
 
