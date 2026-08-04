@@ -271,6 +271,35 @@ The project is configured with GitHub Actions workflow for auto building all pla
 
 ## 📋 Changelog
 
+### v1.7.9 (2026-8-4) — GPT-5.6 / Responses API Compatibility, Quota Analytics, and Reliability Improvements
+
+#### 🤖 GPT-5.6 and OpenAI Responses API Compatibility
+
+- **New**: Proxy support for GPT-5.6; `reasoning.effort: none` now correctly disables thinking
+- **Enhanced**: Expanded OpenAI Responses API conversion for developer messages, image/file input, tool calls, and tool results
+- **Enhanced**: Custom function tools supplied through `additional_tools` are preserved and forwarded correctly
+- **Fixed**: Tool-call XML leaked across streaming chunks is parsed, deduplicated, and recovered as structured tool calls, preventing raw tags and failed Agent tool execution
+
+#### 📊 Home Quota Analytics
+
+- **New**: Monthly quota analytics dashboard with total, used and remaining quota, daily average, end-of-month projection, daily trends, and subscription distribution
+- **New**: Monthly account-usage snapshots, quota-range distribution, and highest-consumption account ranking
+- **New**: Aggregated home-page alerts for banned accounts, accounts expiring within 7 days, and accounts with usage at or above 90%; links directly to filtered account lists
+
+#### ✉️ Registration and Token Refresh
+
+- **New**: GPTmail (`mail.chatgpt.org.uk`) verification-code retrieval for registration, supporting private-domain inboxes and Cloudflare forwarding
+- **Improved**: An independent main-process refresh scheduler keeps near-expiry account tokens refreshed even when the window is minimized or closed
+- **Fixed**: Concurrent verification-code handling, TLS session rebuilding, browser-auth parsing, and Proton configuration validation in batch registration
+
+#### ⚡ Proxy and Account Reliability
+
+- **Improved**: Quota-exhausted accounts automatically recover when their reset time arrives; single-flight token refresh prevents concurrent refreshes and false account switching
+- **Improved**: Streaming backpressure prevents slow clients from accumulating memory; prompt-cache keys now use stable deep serialization
+- **Fixed**: Preserved proxy logs and cache metrics, and prevented request-body chunks from being lost during MITM proxy handshakes
+- **Fixed**: Machine-ID elevation restart when Windows install paths contain spaces; refined Enterprise profileArn handling and OpenCode 1.15+ compatibility
+
+---
 
 ### v1.7.5 (2026-6-7) — Thinking Mode + Enterprise profileArn Full Fix + Agent Mode & Steering + Tool Use Leak Fix
 
