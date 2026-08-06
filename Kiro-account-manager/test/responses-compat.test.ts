@@ -20,6 +20,7 @@ describe('Kiro-native GPT-5.6 model routing', () => {
     expect(mapModelId('gpt-5.6-luna')).toBe('gpt-5.6-luna')
     expect(mapModelId('gpt-5.6')).toBe('gpt-5.6-sol')
     expect(mapModelId('gpt-5-6-terra')).toBe('gpt-5.6-terra')
+    expect(mapModelId('codex-auto-review')).toBe('gpt-5.6-sol')
     expect(getModelContextLength('gpt-5.6-sol')).toBe(272000)
   })
 })

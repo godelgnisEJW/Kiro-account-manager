@@ -18,7 +18,7 @@ import type {
   TokenRefreshCallback
 } from './types'
 import { AccountPool, ErrorType, classifyError } from './accountPool'
-import { callKiroApiStream, callKiroApi, fetchKiroModels, setModelContextWindow, type KiroModel } from './kiroApi'
+import { callKiroApiStream, callKiroApi, fetchKiroModels, mapModelId, setModelContextWindow, type KiroModel } from './kiroApi'
 import { proxyLogger } from './logger'
 import { getKProxyService, generateDeviceId } from '../kproxy'
 import {
@@ -964,6 +964,45 @@ export class ProxyServer {
     })
   }
 
+  /**
+   * Keep an SSE response active while an upstream operation is temporarily silent.
+   *
+   * SSE comment frames are ignored by clients, but still reset idle timers in HTTP
+   * clients and intermediate proxies. This is especially important for the Responses
+   * compatibility path, which currently buffers the Kiro result before translating it
+   * into Responses events and can otherwise emit no bytes for several minutes.
+   */
+  private startSseHeartbeat(res: http.ServerResponse, intervalMs: number = 15_000): () => void {
+    let timer: NodeJS.Timeout | undefined
+    let stopped = false
+    const stop = (): void => {
+      if (stopped) return
+      stopped = true
+      if (timer) clearInterval(timer)
+      res.off('close', stop)
+      res.off('finish', stop)
+    }
+
+    timer = setInterval(() => {
+      if (res.destroyed || res.writableEnded) {
+        stop()
+        return
+      }
+      try {
+        res.write(': keep-alive\n\n')
+      } catch (error) {
+        proxyLogger.warn('ProxyServer', 'Failed to write SSE heartbeat', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+        stop()
+      }
+    }, Math.max(1_000, intervalMs))
+    timer.unref?.()
+    res.once('close', stop)
+    res.once('finish', stop)
+    return stop
+  }
+
   // 检测错误消息中是否包含账号被长期封禁的特征
   // 返回 { reason, message } 表示需要标记 suspended；返回 null 表示非封禁错误
   // 覆盖：
@@ -1041,7 +1080,9 @@ export class ProxyServer {
   // 从模型缓存查找指定模型的 thinking 配置
   private getThinkingConfig(modelId: string): ThinkingConfig | undefined {
     if (!this.modelCache) return undefined
-    const lower = modelId.toLowerCase()
+    // Resolve client aliases (including Codex's internal review model) before
+    // consulting Kiro capability metadata.
+    const lower = mapModelId(modelId).toLowerCase()
     const model = this.modelCache.models.find(m => m.modelId.toLowerCase() === lower)
     if (!model) return undefined
     const schema = extractThinkingSchema(model.additionalModelRequestFieldsSchema)
@@ -1788,10 +1829,18 @@ export class ProxyServer {
     const path = req.url || '/'
     const method = req.method || 'GET'
     const clientIP = this.getClientIP(req)
+    const requestStartedAt = Date.now()
     const controller = new AbortController()
     const abortRequest = () => {
       if (!this.isStopping && res.writableEnded) return
       if (!controller.signal.aborted) {
+        if (!this.isStopping) {
+          proxyLogger.warn('ProxyServer', `Client disconnected during ${method} ${path}`, {
+            elapsedMs: Date.now() - requestStartedAt,
+            headersSent: res.headersSent,
+            writableLength: res.writableLength
+          })
+        }
         controller.abort(new Error(this.isStopping ? 'Proxy server stopped' : 'Client disconnected'))
       }
     }
@@ -2664,7 +2713,8 @@ export class ProxyServer {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive'
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no'
         })
         const responseId = `resp_${uuidv4()}`
         const createdAt = Math.floor(Date.now() / 1000)
@@ -2684,15 +2734,26 @@ export class ProxyServer {
         }
         writeResponseEvent('response.created', { response: pendingResponse })
         writeResponseEvent('response.in_progress', { response: pendingResponse })
-        const { result, account: usedAccount } = await this.callWithRetry(
-          account,
-          async (acc) => {
-            const retryPayload = openaiToKiro(processedRequest, acc.profileArn, toolNameRegistry, this.getThinkingConfig(processedRequest.model))
-            return callKiroApi(acc, retryPayload, signal)
-          },
-          '/v1/responses',
-          signal
-        )
+        // Responses events are currently produced after the Kiro stream has been
+        // aggregated. Keep the downstream connection alive during that silent window.
+        const stopHeartbeat = this.startSseHeartbeat(res)
+        let result: Awaited<ReturnType<typeof callKiroApi>>
+        let usedAccount: ProxyAccount
+        try {
+          const callResult = await this.callWithRetry(
+            account,
+            async (acc) => {
+              const retryPayload = openaiToKiro(processedRequest, acc.profileArn, toolNameRegistry, this.getThinkingConfig(processedRequest.model))
+              return callKiroApi(acc, retryPayload, signal)
+            },
+            '/v1/responses',
+            signal
+          )
+          result = callResult.result
+          usedAccount = callResult.account
+        } finally {
+          stopHeartbeat()
+        }
         const chatResponse = kiroToOpenaiResponse(result.content, result.toolUses, result.usage, chatRequest.model, toolNameRegistry, result.reasoningContent)
         this.throwIfResponseClosed(res, signal)
         const response = openAIChatToResponsesResponse(chatResponse, responseRequest.previous_response_id, processedRequest.tools)

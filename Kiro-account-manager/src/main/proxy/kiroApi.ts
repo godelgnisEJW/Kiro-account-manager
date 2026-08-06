@@ -296,6 +296,9 @@ const MODEL_ID_MAP: Record<string, string> = {
   'gpt-5-6-sol': 'gpt-5.6-sol',
   'gpt-5-6-terra': 'gpt-5.6-terra',
   'gpt-5-6-luna': 'gpt-5.6-luna',
+  // Codex uses this internal model for approval/review turns during long tasks.
+  // Keep it on a Kiro-native OpenAI model so reasoning fields stay compatible.
+  'codex-auto-review': 'gpt-5.6-sol',
   // 旧 GPT 名称仍作为 Claude 兼容别名。
   'gpt-4': 'claude-sonnet-4.5',
   'gpt-4o': 'claude-sonnet-4.5',
@@ -1355,6 +1358,46 @@ export async function callKiroApiStream(
 
       // THINKING_SIGNATURE_INVALID: 剥离 history 中 reasoningContent 后重试一次（官方 IDE 同策略）
       const errMsg = (error as Error).message || ''
+      // Some endpoint/model combinations advertise or receive reasoning options but
+      // reject additionalModelRequestFields at request time. Retry the same endpoint
+      // once without those optional fields instead of terminating a Codex task.
+      if (errMsg.includes('additionalModelRequestFields is not supported') && payload.additionalModelRequestFields) {
+        proxyLogger.warn('KiroAPI', `Model rejected additionalModelRequestFields on ${endpoint.name}; retrying without them`, {
+          modelId: getPayloadModelId(payload)
+        })
+        try {
+          throwIfAborted(signal)
+          const retryPayload = clonePayload(payload)
+          delete retryPayload.additionalModelRequestFields
+          const resolvedArn2 = resolveProfileArn(account)
+          if (resolvedArn2) retryPayload.profileArn = resolvedArn2
+          if (endpoint.name === 'CodeWhisperer') {
+            applyPayloadModelId(retryPayload, await resolveCodeWhispererModelId(account, getPayloadModelId(retryPayload), signal))
+          }
+          applyPayloadOrigin(retryPayload, endpoint.origin)
+          if (endpoint.name === 'AmazonQCLI') {
+            delete (retryPayload.conversationState as unknown as Record<string, unknown>).agentContinuationId
+            delete (retryPayload.conversationState as unknown as Record<string, unknown>).agentTaskType
+          }
+          const retryStr = JSON.stringify(retryPayload)
+          const retryHeaders = getAuthHeaders(account, endpoint)
+          const retryAgent = getNetworkAgent(account)
+          const retryResponse = retryAgent
+            ? await undiciFetch(endpoint.url, { method: 'POST', headers: retryHeaders, body: retryStr, signal, dispatcher: retryAgent } as UndiciRequestInit) as unknown as Response
+            : await fetch(endpoint.url, { method: 'POST', headers: retryHeaders, body: retryStr, signal })
+          if (retryResponse.ok) {
+            await parseEventStream(retryResponse.body!, onChunk, onComplete, onError, retryStr.length, signal, getPayloadModelId(retryPayload), retryStr)
+            return
+          }
+          const retryBody = await retryResponse.text()
+          lastError = new Error(`API error ${retryResponse.status}: ${retryBody}`)
+          console.error(`[KiroAPI] additionalModelRequestFields fallback failed: ${retryResponse.status} ${retryBody.slice(0, 200)}`)
+        } catch (retryErr) {
+          if (signal?.aborted) { onError(getAbortError(signal)); return }
+          lastError = retryErr as Error
+          console.error('[KiroAPI] additionalModelRequestFields fallback error:', retryErr)
+        }
+      }
       if (errMsg.includes('THINKING_SIGNATURE_INVALID')) {
         console.log(`[KiroAPI] THINKING_SIGNATURE_INVALID on ${endpoint.name}, retrying with reasoningContent stripped`)
         try {
