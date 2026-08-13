@@ -139,7 +139,14 @@ npm run typecheck
 
 ## 📋 更新日志
 
-### v1.7.0（当前版本）
+### v1.7.10（当前版本）
+
+#### Codex 与 Responses 兼容性
+- **Codex 审阅路由** — 将 Codex 内部 `codex-auto-review` 模型路由至 Kiro 原生 GPT-5.6 Sol 模型，并应用匹配的思考能力配置。
+- **思考参数降级重试** — 当端点不支持可选的 `additionalModelRequestFields` 时，自动移除该字段并在原端点重试，避免任务中断。
+- **Responses 流式稳定性** — 在 Kiro 输出汇总期间发送 SSE 保活帧，禁用反向代理缓冲，并优化客户端断开诊断。
+
+### v1.7.0
 
 #### 🔥 重大功能（4 期累计 19 项新功能）
 

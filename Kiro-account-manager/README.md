@@ -139,7 +139,14 @@ npm run typecheck
 
 ## 📋 Changelog
 
-### v1.7.0 (Current)
+### v1.7.10 (Current)
+
+#### Codex and Responses Compatibility
+- **Codex review routing** — Routes Codex's internal `codex-auto-review` model to Kiro's native GPT-5.6 Sol model and applies the matched thinking capability settings.
+- **Reasoning fallback** — When an endpoint rejects optional `additionalModelRequestFields`, automatically retries the same request without those fields instead of ending the task.
+- **More reliable Responses streaming** — Sends SSE keep-alive frames while Kiro output is being assembled, disables reverse-proxy buffering, and improves client-disconnect diagnostics.
+
+### v1.7.0
 
 #### 🔥 Major Features (4 phases, 19 new features)
 
