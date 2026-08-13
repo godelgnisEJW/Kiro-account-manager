@@ -271,6 +271,16 @@ The project is configured with GitHub Actions workflow for auto building all pla
 
 ## 📋 Changelog
 
+### v1.7.10 (2026-8-13) — Codex Review Routing and Responses Streaming Reliability
+
+#### 🤖 Codex and Responses API Compatibility
+
+- **New**: Routes Codex's internal `codex-auto-review` model to Kiro's native GPT-5.6 Sol model and applies the matched thinking capability settings
+- **Improved**: When an endpoint rejects optional `additionalModelRequestFields`, automatically retries the same request without those fields instead of ending the task
+- **Improved**: Sends SSE keep-alive frames while Kiro output is being assembled, disables reverse-proxy buffering, and improves client-disconnect diagnostics for OpenAI Responses streaming
+
+---
+
 ### v1.7.9 (2026-8-4) — GPT-5.6 / Responses API Compatibility, Quota Analytics, and Reliability Improvements
 
 #### 🤖 GPT-5.6 and OpenAI Responses API Compatibility
