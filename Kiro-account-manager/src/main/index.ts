@@ -23,6 +23,7 @@ import {
   parseAccessTokenClaims,
   watchKiroAuthTokenFile,
   resolveProfileArnForWrite,
+  resolveProfileArnForUsageQuery,
   KIRO_AUTH_TOKEN_PATH
 } from './kiroAuthSync'
 import { openaiToKiro } from './proxy/translator'
@@ -3204,7 +3205,7 @@ app.whenReady().then(async () => {
         console.log('[SSO] Fetching user info and usage data...')
         const [userInfoResult, usageResult] = await Promise.all([
           getUserInfo(ssoResult.accessToken).catch(e => { console.error('[SSO] getUserInfo failed:', e); return undefined }),
-          getUsageAndLimits(ssoResult.accessToken, 'BuilderId', undefined, undefined, region).catch(e => { console.error('[SSO] getUsageAndLimits failed:', e); return undefined })
+          getUsageAndLimits(ssoResult.accessToken, 'BuilderId', resolveProfileArnForUsageQuery(undefined), undefined, region).catch(e => { console.error('[SSO] getUsageAndLimits failed:', e); return undefined })
         ])
         userInfo = userInfoResult
         usageData = usageResult
@@ -3529,6 +3530,12 @@ app.whenReady().then(async () => {
       // 获取账户绑定的设备 ID
       const accountMachineId = account?.machineId as string | undefined
 
+      // profileArn 决策：GetUsageLimits 会校验 profileArn 归属，传合成/占位符 ARN 会 400 "Improperly formed request"
+      // 只有账号自己真实拥有的 ARN（如 Enterprise 通过 ListAvailableProfiles 拿到的）才传，否则不传
+      const resolvedProfileArn = resolveProfileArnForUsageQuery(
+        account?.profileArn || account?.credentials?.profileArn
+      )
+
       // 第一次尝试：使用当前 accessToken
       try {
         // 并行调用 GetUserInfo 和 getUsageAndLimits
@@ -3540,7 +3547,7 @@ app.whenReady().then(async () => {
             }
             return undefined
           }),
-          getUsageAndLimits(accessToken, idp, undefined, accountMachineId, region, account?.email)
+          getUsageAndLimits(accessToken, idp, resolvedProfileArn, accountMachineId, region, account?.email)
         ])
         return parseUsageResponse(usageResult, undefined, userInfoResult)
       } catch (apiError) {
@@ -3582,7 +3589,7 @@ app.whenReady().then(async () => {
                 }
                 return undefined
               }),
-              getUsageAndLimits(refreshResult.accessToken, idp, undefined, accountMachineId, region)
+              getUsageAndLimits(refreshResult.accessToken, idp, resolvedProfileArn, accountMachineId, region)
             ])
             
             // 返回结果并包含新凭证
@@ -3831,7 +3838,8 @@ app.whenReady().then(async () => {
                   }
                 }
                 console.log(`[BackgroundRefresh] Account ${account.id} machineId: ${account.machineId || 'undefined'}`)
-                const rawUsage = await getUsageAndLimits(newAccessToken, idp, undefined, account.machineId, region) as UsageResponse
+                const resolvedProfileArn = resolveProfileArnForUsageQuery(existingProfileArn || resolvedBgProfileArn)
+                const rawUsage = await getUsageAndLimits(newAccessToken, idp, resolvedProfileArn, account.machineId, region) as UsageResponse
                 
                 // 解析使用量数据
                 const creditUsage = rawUsage.usageBreakdownList?.find(b => b.resourceType === 'CREDIT')
@@ -3998,6 +4006,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('background-batch-check', async (_event, accounts: Array<{
     id: string
     email: string
+    profileArn?: string
     credentials: {
       accessToken: string
       refreshToken?: string
@@ -4006,6 +4015,7 @@ app.whenReady().then(async () => {
       region?: string
       authMethod?: string
       provider?: string
+      profileArn?: string
     }
     idp?: string
   }>, concurrency: number = 10) => {
@@ -4041,9 +4051,14 @@ app.whenReady().then(async () => {
               idp = provider
             }
 
+            // profileArn 决策：GetUsageLimits 只接受账号真实拥有的 ARN，合成/占位符会 400
+            const resolvedProfileArn = resolveProfileArnForUsageQuery(
+              account.profileArn || account.credentials?.profileArn
+            )
+
             // 调用 API 获取用量和用户信息（根据配置选择 REST 或 CBOR 格式）
             const [usageRes, userInfoRes] = await Promise.allSettled([
-              getUsageAndLimits(accessToken, idp, undefined, undefined, account.credentials?.region, account.email) as Promise<{
+              getUsageAndLimits(accessToken, idp, resolvedProfileArn, undefined, account.credentials?.region, account.email) as Promise<{
                 usageBreakdownList?: Array<{
                   resourceType?: string
                   displayName?: string
@@ -4455,7 +4470,10 @@ app.whenReady().then(async () => {
         userInfo?: { email?: string; userId?: string }
       }
       
-      const usageResult = await getUsageAndLimits(refreshResult.accessToken, idp, undefined, undefined, region) as UsageResponse
+      // 新账号验证阶段不存在"真实"profileArn（尚未调用过 ListAvailableProfiles），
+      // GetUsageLimits 会校验归属，传合成/占位符 ARN 会 400 "Improperly formed request" —— 这里不传
+      const verifyProfileArn = resolveProfileArnForUsageQuery(undefined)
+      const usageResult = await getUsageAndLimits(refreshResult.accessToken, idp, verifyProfileArn, undefined, region) as UsageResponse
       
       // 解析用户信息
       const email = usageResult.userInfo?.email || ''

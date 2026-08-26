@@ -170,6 +170,7 @@ interface KiroApi {
   backgroundBatchCheck: (accounts: Array<{
     id: string
     email: string
+    profileArn?: string
     credentials: {
       accessToken: string
       refreshToken?: string
@@ -178,6 +179,7 @@ interface KiroApi {
       region?: string
       authMethod?: string
       provider?: string
+      profileArn?: string
     }
     idp?: string
   }>, concurrency?: number) => Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }>

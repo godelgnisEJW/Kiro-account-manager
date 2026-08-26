@@ -1565,6 +1565,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     const accountsToCheck: Array<{
       id: string
       email: string
+      profileArn?: string
       credentials: {
         accessToken: string
         refreshToken?: string
@@ -1573,6 +1574,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         region?: string
         authMethod?: string
         provider?: string
+        profileArn?: string
       }
       idp?: string
     }> = []
@@ -1580,10 +1582,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     for (const id of ids) {
       const account = accounts.get(id)
       if (!account?.credentials.accessToken) continue
-      
+
       accountsToCheck.push({
         id,
         email: account.email,
+        profileArn: account.profileArn,
         credentials: {
           accessToken: account.credentials.accessToken,
           refreshToken: account.credentials.refreshToken,
@@ -1591,7 +1594,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           clientSecret: account.credentials.clientSecret,
           region: account.credentials.region,
           authMethod: account.credentials.authMethod,
-          provider: account.credentials.provider
+          provider: account.credentials.provider,
+          profileArn: account.credentials.profileArn
         },
         idp: account.idp
       })
