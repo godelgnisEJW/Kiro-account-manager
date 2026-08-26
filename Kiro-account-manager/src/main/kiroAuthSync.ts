@@ -55,6 +55,36 @@ export function isPlaceholderProfileArn(arn: string | undefined | null): boolean
   return PLACEHOLDER_PROFILE_ARNS.has(arn)
 }
 
+// Enterprise 备用 ARN 是区域化的合成值（固定账号 610548660232 + profile VNECVYCYYAWN），不代表账号真实归属
+const ENTERPRISE_FALLBACK_ARN_RE = new RegExp(`^arn:aws:codewhisperer:[a-z0-9-]+:${ENTERPRISE_FALLBACK_ACCOUNT_ID}:profile/${ENTERPRISE_FALLBACK_PROFILE_ID}$`)
+
+/**
+ * 检查给定 ARN 是否是本模块合成/兜底的值（BuilderId 占位符 / Social 固定 ARN / Enterprise 兜底 ARN）。
+ * 这些 ARN 不代表账号的真实归属 —— 流式对话类接口需要靠它们兜底（不传会 403），
+ * 但 GetUsageLimits / GetUserUsageAndLimits 等查询类接口会校验 profileArn 归属，
+ * 传入合成值会被直接判定为 400 "Improperly formed request"。
+ */
+export function isSyntheticProfileArn(arn: string | undefined | null): boolean {
+  if (!arn) return false
+  if (arn === KIRO_BUILDER_ID_PLACEHOLDER_ARN) return true
+  if (arn === KIRO_SOCIAL_PROFILE_ARN) return true
+  if (ENTERPRISE_FALLBACK_ARN_RE.test(arn)) return true
+  return false
+}
+
+/**
+ * profileArn 决策 —— 专用于 GetUsageLimits / GetUserUsageAndLimits 等查询类接口。
+ * 与 resolveProfileArnForWrite（磁盘 token 文件/流式接口用）不同：这里只有账号自己
+ * 真实拥有的 ARN（例如 Enterprise 通过 ListAvailableProfiles 成功获取的）才会被传递，
+ * 合成/占位符 ARN 一律不传（避免 400）。
+ */
+export function resolveProfileArnForUsageQuery(profileArn?: string): string | undefined {
+  if (profileArn && !isSyntheticProfileArn(profileArn)) {
+    return profileArn
+  }
+  return undefined
+}
+
 /**
  * 写入 token 文件前对 profileArn 的"应该写啥"做统一决策。
  *

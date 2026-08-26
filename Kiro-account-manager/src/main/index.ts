@@ -23,6 +23,7 @@ import {
   parseAccessTokenClaims,
   watchKiroAuthTokenFile,
   resolveProfileArnForWrite,
+  resolveProfileArnForUsageQuery,
   KIRO_AUTH_TOKEN_PATH
 } from './kiroAuthSync'
 import { openaiToKiro } from './proxy/translator'
@@ -3204,7 +3205,7 @@ app.whenReady().then(async () => {
         console.log('[SSO] Fetching user info and usage data...')
         const [userInfoResult, usageResult] = await Promise.all([
           getUserInfo(ssoResult.accessToken).catch(e => { console.error('[SSO] getUserInfo failed:', e); return undefined }),
-          getUsageAndLimits(ssoResult.accessToken, 'BuilderId', resolveProfileArnForWrite({ authMethod: 'IdC', provider: 'BuilderId', region }), undefined, region).catch(e => { console.error('[SSO] getUsageAndLimits failed:', e); return undefined })
+          getUsageAndLimits(ssoResult.accessToken, 'BuilderId', resolveProfileArnForUsageQuery(undefined), undefined, region).catch(e => { console.error('[SSO] getUsageAndLimits failed:', e); return undefined })
         ])
         userInfo = userInfoResult
         usageData = usageResult
@@ -3529,14 +3530,11 @@ app.whenReady().then(async () => {
       // 获取账户绑定的设备 ID
       const accountMachineId = account?.machineId as string | undefined
 
-      // profileArn 决策：后端 GetUsageLimits 同样强制要求 profileArn（否则 403 "not authorized"）
-      // 复用与反代一致的决策：已有真实 ARN 直接用，否则按账号类型兜底（BuilderId→占位符 / Social→固定 / Enterprise→备用）
-      const resolvedProfileArn = resolveProfileArnForWrite({
-        profileArn: account?.profileArn || account?.credentials?.profileArn,
-        authMethod,
-        provider,
-        region
-      })
+      // profileArn 决策：GetUsageLimits 会校验 profileArn 归属，传合成/占位符 ARN 会 400 "Improperly formed request"
+      // 只有账号自己真实拥有的 ARN（如 Enterprise 通过 ListAvailableProfiles 拿到的）才传，否则不传
+      const resolvedProfileArn = resolveProfileArnForUsageQuery(
+        account?.profileArn || account?.credentials?.profileArn
+      )
 
       // 第一次尝试：使用当前 accessToken
       try {
@@ -3840,12 +3838,7 @@ app.whenReady().then(async () => {
                   }
                 }
                 console.log(`[BackgroundRefresh] Account ${account.id} machineId: ${account.machineId || 'undefined'}`)
-                const resolvedProfileArn = resolveProfileArnForWrite({
-                  profileArn: existingProfileArn || resolvedBgProfileArn,
-                  authMethod,
-                  provider,
-                  region
-                })
+                const resolvedProfileArn = resolveProfileArnForUsageQuery(existingProfileArn || resolvedBgProfileArn)
                 const rawUsage = await getUsageAndLimits(newAccessToken, idp, resolvedProfileArn, account.machineId, region) as UsageResponse
                 
                 // 解析使用量数据
@@ -4058,13 +4051,10 @@ app.whenReady().then(async () => {
               idp = provider
             }
 
-            // profileArn 决策：后端强制要求，否则 403
-            const resolvedProfileArn = resolveProfileArnForWrite({
-              profileArn: account.profileArn || account.credentials?.profileArn,
-              authMethod,
-              provider,
-              region: account.credentials?.region
-            })
+            // profileArn 决策：GetUsageLimits 只接受账号真实拥有的 ARN，合成/占位符会 400
+            const resolvedProfileArn = resolveProfileArnForUsageQuery(
+              account.profileArn || account.credentials?.profileArn
+            )
 
             // 调用 API 获取用量和用户信息（根据配置选择 REST 或 CBOR 格式）
             const [usageRes, userInfoRes] = await Promise.allSettled([
@@ -4480,7 +4470,9 @@ app.whenReady().then(async () => {
         userInfo?: { email?: string; userId?: string }
       }
       
-      const verifyProfileArn = resolveProfileArnForWrite({ authMethod, provider, region })
+      // 新账号验证阶段不存在"真实"profileArn（尚未调用过 ListAvailableProfiles），
+      // GetUsageLimits 会校验归属，传合成/占位符 ARN 会 400 "Improperly formed request" —— 这里不传
+      const verifyProfileArn = resolveProfileArnForUsageQuery(undefined)
       const usageResult = await getUsageAndLimits(refreshResult.accessToken, idp, verifyProfileArn, undefined, region) as UsageResponse
       
       // 解析用户信息
