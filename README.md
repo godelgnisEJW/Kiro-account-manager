@@ -271,6 +271,17 @@ The project is configured with GitHub Actions workflow for auto building all pla
 
 ## 📋 Changelog
 
+### v1.7.11 (2026-8-27) — Login Verification and Enterprise Profile Fixes
+
+#### Authentication and Account Reliability
+
+- **Fixed**: Login verification no longer sends synthetic or placeholder profileArn values to usage-query APIs, avoiding malformed-request failures for new accounts
+- **Improved**: Enterprise and external-IdP accounts resolve their real profile ARN before usage lookup when available
+- **Improved**: Background refresh, batch account checks, and SSO usage queries now consistently distinguish real profile ARNs from fallback values
+- **Fixed**: Kiro IDE authentication synchronization and account metadata handling during token refresh
+
+---
+
 ### v1.7.10 (2026-8-13) — Codex Review Routing and Responses Streaming Reliability
 
 #### 🤖 Codex and Responses API Compatibility

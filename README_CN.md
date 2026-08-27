@@ -271,6 +271,17 @@ npx electron-builder --linux --arm64
 
 ## 📋 更新日志
 
+### v1.7.11 (2026-8-27) — 登录验证与 Enterprise Profile 修复
+
+#### 登录与账号稳定性
+
+- **修复**: 登录验证不再向额度查询接口传入合成或占位 profileArn，避免新账号因 ARN 格式错误导致验证失败
+- **改进**: Enterprise 与 External IdP 账号在可用时会先解析真实 profile ARN，再查询额度
+- **改进**: 后台刷新、批量检查账号及 SSO 额度查询统一区分真实 profile ARN 与兜底值
+- **修复**: Token 刷新期间的 Kiro IDE 认证同步及账号元数据处理
+
+---
+
 ### v1.7.10 (2026-8-13) — Codex 审阅路由与 Responses 流式稳定性
 
 #### 🤖 Codex 与 Responses API 兼容
