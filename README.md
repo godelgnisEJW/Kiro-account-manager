@@ -271,6 +271,15 @@ The project is configured with GitHub Actions workflow for auto building all pla
 
 ## 📋 Changelog
 
+### v1.7.12 (2026-9-1) — Workspace Tool Execution Recovery
+
+#### 🤖 Proxy and Agent Reliability
+
+- **Fixed**: Coding models that incorrectly claimed the workspace or Git history was unavailable now receive a bounded recovery turn that invokes the supplied workspace tools
+- **Improved**: OpenAI Chat, OpenAI Responses, and Claude Messages requests enforce tool-first workspace execution and avoid command-only handoffs
+- **Improved**: Responses `local_shell` and `shell` tools are normalized to the internal `exec_command` tool instead of being silently dropped
+- **Added**: Regression coverage for tool-first prompts and built-in shell tool normalization
+
 ### v1.7.11 (2026-8-27) — Login Verification and Enterprise Profile Fixes
 
 #### Authentication and Account Reliability

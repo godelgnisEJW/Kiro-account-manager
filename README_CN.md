@@ -271,6 +271,15 @@ npx electron-builder --linux --arm64
 
 ## 📋 更新日志
 
+### v1.7.12 (2026-9-1) — 工作区工具执行自愈
+
+#### 🤖 反代与 Agent 稳定性
+
+- **修复**: 模型错误声称无法访问工作区或 Git 历史时，反代会自动发起一次有界纠偏回合，调用请求中提供的工作区工具
+- **改进**: OpenAI Chat、OpenAI Responses 与 Claude Messages 请求统一强化工具优先执行，避免只把命令转交给用户
+- **改进**: Responses 的 `local_shell` 和 `shell` 工具会归一化为内部 `exec_command`，不再被静默丢弃
+- **新增**: 增加工具优先提示词与内置 Shell 工具归一化回归测试
+
 ### v1.7.11 (2026-8-27) — 登录验证与 Enterprise Profile 修复
 
 #### 登录与账号稳定性

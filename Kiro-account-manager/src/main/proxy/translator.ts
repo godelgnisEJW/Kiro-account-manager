@@ -335,13 +335,31 @@ function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
   for (const tool of tools) {
     if (!tool || typeof tool !== 'object') continue
     const nested = tool.function && typeof tool.function === 'object' ? tool.function : undefined
-    const name = nested?.name || tool.name
+    const rawType = tool.type
+    // Responses clients may advertise the built-in shell capability as
+    // `local_shell`/`shell` without a function name. Kiro exposes tools as
+    // function specifications, so provide a stable internal adapter instead
+    // of silently dropping the workspace tool.
+    const isShellTool = rawType === 'local_shell' || rawType === 'shell'
+    const name = nested?.name || tool.name || (isShellTool ? 'exec_command' : undefined)
     const type = tool.type || (name ? 'function' : undefined)
-    if (!name || (type !== 'function' && type !== 'custom')) {
+    const responseToolType: OpenAITool['response_tool_type'] = isShellTool
+      ? 'function'
+      : type === 'custom' ? 'custom' : type === 'function' ? 'function' : undefined
+    if (!name || (!isShellTool && type !== 'function' && type !== 'custom')) {
       console.warn(`[Responses] Skipping unsupported tool type: ${type || 'unknown'}`)
       continue
     }
-    const parameters = type === 'custom'
+    const parameters = isShellTool
+      ? {
+          type: 'object',
+          properties: {
+            cmd: { type: 'string', description: 'Command to run in the current workspace.' }
+          },
+          required: ['cmd'],
+          additionalProperties: false
+        }
+      : type === 'custom'
       ? {
           type: 'object',
           properties: {
@@ -361,10 +379,10 @@ function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
       type: 'function',
       function: {
         name,
-        description: nested?.description || tool.description || `Tool: ${name}`,
+        description: nested?.description || tool.description || (isShellTool ? 'Run a command in the current workspace.' : `Tool: ${name}`),
         parameters
       },
-      response_tool_type: type,
+      response_tool_type: responseToolType,
       ...(tool.cache_control ? { cache_control: tool.cache_control } : {})
     })
   }
@@ -570,10 +588,12 @@ export function openaiToKiro(
 当用户要求执行特定任务时，你必须遵循以下纪律：
 1. **目标锁定**：在整个会话中始终牢记用户的原始目标，不要在代码探索过程中迷失方向
 2. **行动优先**：优先执行任务而非仅分析或总结，除非用户明确只要求分析
-3. **计划执行**：为任务创建明确的步骤计划，逐步执行并标记完成状态
-4. **禁止确认性收尾**：在任务未完成前，禁止输出"需要我继续吗？"、"需要深入分析吗？"等确认性问题
-5. **持续推进**：如果发现部分任务已完成，立即继续执行剩余未完成的任务
-6. **完整交付**：直到所有任务步骤都执行完毕才算完成
+3. **工具优先**：当请求提供了终端、文件、搜索或补丁工具时，涉及仓库/文件的事实必须先调用工具验证；禁止声称无法访问本地工作区，也禁止把应由工具执行的命令仅作为代码块交给用户运行
+4. **工作区一致**：所有命令都在客户端当前工作区执行。Git 命令失败时先检查当前目录和 Git 安全目录配置，再采取修复措施，不要直接把命令转嫁给用户
+5. **计划执行**：为任务创建明确的步骤计划，逐步执行并标记完成状态
+6. **禁止确认性收尾**：在任务未完成前，禁止输出"需要我继续吗？"、"需要深入分析吗？"等确认性问题
+7. **持续推进**：如果发现部分任务已完成，立即继续执行剩余未完成的任务
+8. **完整交付**：直到所有任务步骤都执行完毕才算完成
 </execution_discipline>
 `
   systemPrompt = systemPrompt + '\n\n' + executionDirective
@@ -1047,10 +1067,12 @@ export function claudeToKiro(
 当用户要求执行特定任务时，你必须遵循以下纪律：
 1. **目标锁定**：在整个会话中始终牢记用户的原始目标，不要在代码探索过程中迷失方向
 2. **行动优先**：优先执行任务而非仅分析或总结，除非用户明确只要求分析
-3. **计划执行**：为任务创建明确的步骤计划，逐步执行并标记完成状态
-4. **禁止确认性收尾**：在任务未完成前，禁止输出"需要我继续吗？"、"需要深入分析吗？"等确认性问题
-5. **持续推进**：如果发现部分任务已完成，立即继续执行剩余未完成的任务
-6. **完整交付**：直到所有任务步骤都执行完毕才算完成
+3. **工具优先**：当请求提供了终端、文件、搜索或补丁工具时，涉及仓库/文件的事实必须先调用工具验证；禁止声称无法访问本地工作区，也禁止把应由工具执行的命令仅作为代码块交给用户运行
+4. **工作区一致**：所有命令都在客户端当前工作区执行。Git 命令失败时先检查当前目录和 Git 安全目录配置，再采取修复措施，不要直接把命令转嫁给用户
+5. **计划执行**：为任务创建明确的步骤计划，逐步执行并标记完成状态
+6. **禁止确认性收尾**：在任务未完成前，禁止输出"需要我继续吗？"、"需要深入分析吗？"等确认性问题
+7. **持续推进**：如果发现部分任务已完成，立即继续执行剩余未完成的任务
+8. **完整交付**：直到所有任务步骤都执行完毕才算完成
 </execution_discipline>
 `
   systemPrompt = systemPrompt + '\n\n' + executionDirective

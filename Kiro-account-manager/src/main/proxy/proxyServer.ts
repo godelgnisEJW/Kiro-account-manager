@@ -812,6 +812,64 @@ export class ProxyServer {
     return request
   }
 
+  /**
+   * Some coding models occasionally emit a plausible-looking refusal instead of
+   * invoking the workspace tools they were given. Detect that narrow failure mode
+   * so the Responses endpoint can transparently issue one corrective turn.
+   */
+  private shouldRecoverWorkspaceToolUse(content: string, toolUses: unknown[], request: OpenAIChatRequest | ClaudeRequest): boolean {
+    if (toolUses.length > 0 || !content.trim() || !request.tools?.length) return false
+
+    const toolNames = request.tools.map(tool => 'function' in tool ? tool.function.name : tool.name)
+    const hasWorkspaceTool = toolNames.some(toolName => {
+      const name = toolName.toLowerCase()
+      return /(?:exec|command|shell|terminal|patch|edit|read|write|file|workspace|git|directory|list)/.test(name)
+    })
+    if (!hasWorkspaceTool) return false
+
+    const refusal = /(?:cannot|can't|can not|unable to|not able to|don't have access|do not have access|no access|无法|不能|没有|无权).{0,100}(?:workspace|work\s*space|repository|repo|git|file|terminal|command|仓库|工作区|文件|终端|命令)/i
+    const delegatedCommand = /(?:run|execute|please run|请(?:你)?(?:执行|运行)|powershell|git\s+(?:log|status|show))[^\n]{0,180}(?:command|terminal|below|如下|命令|仓库|提交)/i
+    return refusal.test(content) || delegatedCommand.test(content)
+  }
+
+  private workspaceToolRecoveryInstruction(toolNames: string[]): string {
+    return [
+      '<tool_execution_recovery>',
+      'The previous response incorrectly claimed that the local workspace or Git history was unavailable.',
+      'The workspace tools are available in this request. Continue the user task by invoking the appropriate tool now.',
+      'Do not ask the user to run a command and do not return a command-only code block. Inspect the actual workspace first, then report verified results.',
+      toolNames.length > 0 ? `Available workspace-capable tools: ${toolNames.join(', ')}` : '',
+      '</tool_execution_recovery>'
+    ].filter(Boolean).join('\n')
+  }
+
+  private withWorkspaceToolRecoveryInstruction(request: OpenAIChatRequest): OpenAIChatRequest {
+    const toolNames = request.tools?.map(tool => tool.function.name).filter(Boolean).slice(0, 40) || []
+    const instruction = [
+      this.workspaceToolRecoveryInstruction(toolNames)
+    ].filter(Boolean).join('\n')
+    return {
+      ...request,
+      messages: [
+        { role: 'system', content: instruction },
+        ...request.messages
+      ]
+    }
+  }
+
+  private withClaudeWorkspaceToolRecoveryInstruction(request: ClaudeRequest): ClaudeRequest {
+    const toolNames = request.tools?.map(tool => tool.name).filter(Boolean).slice(0, 40) || []
+    const instruction = this.workspaceToolRecoveryInstruction(toolNames)
+    return {
+      ...request,
+      system: request.system
+        ? typeof request.system === 'string'
+          ? `${instruction}\n\n${request.system}`
+          : [{ type: 'text', text: instruction }, ...request.system]
+        : instruction
+    }
+  }
+
   // 获取统计信息
   getStats(): ProxyStats {
     // 返回可序列化的统计信息（Map 对象在 IPC 中无法正确序列化）
@@ -2740,7 +2798,7 @@ export class ProxyServer {
         let result: Awaited<ReturnType<typeof callKiroApi>>
         let usedAccount: ProxyAccount
         try {
-          const callResult = await this.callWithRetry(
+          let callResult = await this.callWithRetry(
             account,
             async (acc) => {
               const retryPayload = openaiToKiro(processedRequest, acc.profileArn, toolNameRegistry, this.getThinkingConfig(processedRequest.model))
@@ -2749,6 +2807,22 @@ export class ProxyServer {
             '/v1/responses',
             signal
           )
+
+          // Recover once when a model hallucinates a missing workspace instead of
+          // using the supplied terminal/file tools. This is intentionally bounded.
+          if (this.shouldRecoverWorkspaceToolUse(callResult.result.content, callResult.result.toolUses, processedRequest)) {
+            proxyLogger.warn('ProxyServer', 'Recovering a workspace-tool refusal in Responses stream')
+            const recoveryRequest = this.withWorkspaceToolRecoveryInstruction(processedRequest)
+            callResult = await this.callWithRetry(
+              callResult.account,
+              async (acc) => {
+                const retryPayload = openaiToKiro(recoveryRequest, acc.profileArn, toolNameRegistry, this.getThinkingConfig(recoveryRequest.model))
+                return callKiroApi(acc, retryPayload, signal)
+              },
+              '/v1/responses/recovery',
+              signal
+            )
+          }
           result = callResult.result
           usedAccount = callResult.account
         } finally {
@@ -2859,7 +2933,7 @@ export class ProxyServer {
         return
       }
 
-      const { result, account: usedAccount } = await this.callWithRetry(
+      let callResult = await this.callWithRetry(
         account,
         async (acc) => {
           const retryPayload = openaiToKiro(processedRequest, acc.profileArn, toolNameRegistry, this.getThinkingConfig(processedRequest.model))
@@ -2868,6 +2942,23 @@ export class ProxyServer {
         '/v1/responses',
         signal
       )
+      let result = callResult.result
+      let usedAccount = callResult.account
+      if (this.shouldRecoverWorkspaceToolUse(result.content, result.toolUses, processedRequest)) {
+        proxyLogger.warn('ProxyServer', 'Recovering a workspace-tool refusal in Responses request')
+        const recoveryRequest = this.withWorkspaceToolRecoveryInstruction(processedRequest)
+        callResult = await this.callWithRetry(
+          usedAccount,
+          async (acc) => {
+            const retryPayload = openaiToKiro(recoveryRequest, acc.profileArn, toolNameRegistry, this.getThinkingConfig(recoveryRequest.model))
+            return callKiroApi(acc, retryPayload, signal)
+          },
+          '/v1/responses/recovery',
+          signal
+        )
+        result = callResult.result
+        usedAccount = callResult.account
+      }
       const chatResponse = kiroToOpenaiResponse(result.content, result.toolUses, result.usage, chatRequest.model, toolNameRegistry, result.reasoningContent)
       this.throwIfResponseClosed(res, signal)
       const response = openAIChatToResponsesResponse(chatResponse, responseRequest.previous_response_id, processedRequest.tools)
@@ -3152,7 +3243,7 @@ export class ProxyServer {
           cacheProfile ? { ...cacheUsage, cacheProfile, accountId: account.id } : undefined)
       } else {
         // 非流式响应（带重试机制）
-        const { result, account: usedAccount } = await this.callWithRetry(
+        let callResult = await this.callWithRetry(
           account,
           async (acc) => {
             const retryPayload = claudeToKiro(processedRequest, acc.profileArn, toolNameRegistry, claudeThinkingConfig)
@@ -3161,6 +3252,23 @@ export class ProxyServer {
           '/v1/messages',
           signal
         )
+        let result = callResult.result
+        let usedAccount = callResult.account
+        if (this.shouldRecoverWorkspaceToolUse(result.content, result.toolUses, processedRequest)) {
+          proxyLogger.warn('ProxyServer', 'Recovering a workspace-tool refusal in Claude request')
+          const recoveryRequest = this.withClaudeWorkspaceToolRecoveryInstruction(processedRequest)
+          callResult = await this.callWithRetry(
+            usedAccount,
+            async (acc) => {
+              const retryPayload = claudeToKiro(recoveryRequest, acc.profileArn, toolNameRegistry, claudeThinkingConfig)
+              return callKiroApi(acc, retryPayload, signal)
+            },
+            '/v1/messages/recovery',
+            signal
+          )
+          result = callResult.result
+          usedAccount = callResult.account
+        }
         const response = kiroToClaudeResponse(result.content, result.toolUses, result.usage, request.model, toolNameRegistry, result.reasoningContent)
 
         // 用缓存模拟的 usage 覆盖（如果有 cache profile）

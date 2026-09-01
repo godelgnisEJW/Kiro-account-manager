@@ -26,6 +26,26 @@ describe('Kiro-native GPT-5.6 model routing', () => {
 })
 
 describe('OpenAI Responses compatibility', () => {
+  test('injects a tool-first recovery discipline for workspace tasks', () => {
+    const converted = openaiToKiro({
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user', content: 'Summarize the latest commits.' }],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'exec_command',
+          description: 'Run a command in the workspace.',
+          parameters: { type: 'object', properties: { cmd: { type: 'string' } } }
+        }
+      }]
+    })
+
+    const systemMessage = converted.conversationState.history?.[0]?.userInputMessage?.content || ''
+    expect(systemMessage).toContain('工具优先')
+    expect(systemMessage).toContain('禁止声称无法访问本地工作区')
+    expect(systemMessage).toContain('Git 安全目录配置')
+  })
+
   test('accepts Codex additional_tools and extended replay items', () => {
     const request = {
       model: 'gpt-5.6-sol',
@@ -117,6 +137,25 @@ describe('OpenAI Responses compatibility', () => {
       'flat',
       'mcp_style'
     ])
+  })
+
+  test('keeps built-in local shell tools instead of silently dropping them', () => {
+    const converted = responsesToOpenAIChat({
+      model: 'gpt-5.6-sol',
+      input: 'Inspect the repository.',
+      tools: [{ type: 'local_shell' }]
+    })
+
+    expect(converted.tools).toHaveLength(1)
+    expect(converted.tools?.[0]).toMatchObject({
+      type: 'function',
+      function: {
+        name: 'exec_command',
+        parameters: {
+          required: ['cmd']
+        }
+      }
+    })
   })
 
   test('preserves Codex custom tools and custom tool replay', () => {
