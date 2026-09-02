@@ -47,7 +47,7 @@ export interface OpenAITool {
   }
   // Responses API custom tools are represented internally as function tools so
   // Kiro can invoke them, then restored to custom_tool_call in the response.
-  response_tool_type?: 'function' | 'custom'
+  response_tool_type?: 'function' | 'custom' | 'local_shell'
   cache_control?: ClaudeCacheControl
 }
 
@@ -189,6 +189,7 @@ export interface OpenAIResponsesResponse {
 export type OpenAIResponseOutputItem =
   | { type: 'message'; id: string; status: 'completed'; role: 'assistant'; content: { type: 'output_text'; text: string; annotations: unknown[] }[] }
   | { type: 'function_call'; id: string; status: 'completed'; call_id: string; name: string; arguments: string }
+  | { type: 'local_shell_call'; id: string; status: 'completed'; call_id: string; action: Record<string, unknown> }
   | { type: 'custom_tool_call'; id: string; status: 'completed'; call_id: string; name: string; input: string }
 
 // ============ Claude 兼容格式 ============

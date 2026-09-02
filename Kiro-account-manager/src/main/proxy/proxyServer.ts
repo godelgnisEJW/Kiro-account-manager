@@ -2838,6 +2838,8 @@ export class ProxyServer {
             ? { ...item, status: 'in_progress', content: [] }
             : item.type === 'custom_tool_call'
               ? { ...item, status: 'in_progress', input: '' }
+              : item.type === 'local_shell_call'
+                ? { ...item, status: 'in_progress' }
               : { ...item, status: 'in_progress', arguments: '' }
           writeResponseEvent('response.output_item.added', {
             response_id: responseId,
@@ -2893,6 +2895,10 @@ export class ProxyServer {
               output_index: outputIndex,
               input: item.input
             })
+          } else if (item.type === 'local_shell_call') {
+            // Built-in Responses tools are completed as a native output item.
+            // Do not emit function_call_arguments events: Codex uses the
+            // local_shell_call action to decide how to execute the command.
           } else {
             if (item.arguments) {
               writeResponseEvent('response.function_call_arguments.delta', {

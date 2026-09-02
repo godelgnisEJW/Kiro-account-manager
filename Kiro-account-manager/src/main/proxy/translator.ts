@@ -306,8 +306,11 @@ function responseToolCallToMessage(
   itemType: string
 ): OpenAIMessage {
   const callId = item.call_id || item.id || `call_${uuidv4()}`
-  const name = item.name || itemType
-  const args = itemType === 'custom_tool_call'
+  const isLocalShellCall = itemType === 'local_shell_call'
+  const name = isLocalShellCall ? 'exec_command' : (item.name || itemType)
+  const args = isLocalShellCall
+    ? { cmd: localShellCommand(item.action ?? item.arguments ?? item.input) }
+    : itemType === 'custom_tool_call'
     ? { input: stringifyResponseValue(item.input) }
     : item.arguments ?? item.action ?? item.input ?? {}
   return {
@@ -344,7 +347,7 @@ function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
     const name = nested?.name || tool.name || (isShellTool ? 'exec_command' : undefined)
     const type = tool.type || (name ? 'function' : undefined)
     const responseToolType: OpenAITool['response_tool_type'] = isShellTool
-      ? 'function'
+      ? 'local_shell'
       : type === 'custom' ? 'custom' : type === 'function' ? 'function' : undefined
     if (!name || (!isShellTool && type !== 'function' && type !== 'custom')) {
       console.warn(`[Responses] Skipping unsupported tool type: ${type || 'unknown'}`)
@@ -463,6 +466,18 @@ export function openAIChatToResponsesResponse(
   const output: OpenAIResponseOutputItem[] = response.choices.flatMap<OpenAIResponseOutputItem>(choice => {
     if (choice.message.tool_calls?.length) {
       return choice.message.tool_calls.map(toolCall => {
+        const localShellTool = tools?.some(tool =>
+          tool.response_tool_type === 'local_shell' && tool.function.name === toolCall.function.name
+        )
+        if (localShellTool) {
+          return {
+            type: 'local_shell_call' as const,
+            id: `shell_${uuidv4()}`,
+            status: 'completed' as const,
+            call_id: toolCall.id,
+            action: localShellAction(toolCall.function.arguments)
+          }
+        }
         if (customToolNames.has(toolCall.function.name)) {
           return {
             type: 'custom_tool_call' as const,
@@ -529,6 +544,37 @@ export function openAIChatToResponsesResponse(
     responsesResponse.previous_response_id = previousResponseId
   }
   return responsesResponse
+}
+
+function localShellCommand(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(part => String(part)).join(' ')
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    if (typeof obj.cmd === 'string') return obj.cmd
+    if (typeof obj.command === 'string') return obj.command
+    if (Array.isArray(obj.command)) return obj.command.map(part => String(part)).join(' ')
+  }
+  return stringifyResponseValue(value ?? '')
+}
+
+function localShellAction(argumentsJson: string): Record<string, unknown> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(argumentsJson)
+  } catch {
+    parsed = argumentsJson
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const obj = parsed as Record<string, unknown>
+    if (obj.action && typeof obj.action === 'object' && !Array.isArray(obj.action)) return obj.action as Record<string, unknown>
+    if (obj.type === 'exec' && (Array.isArray(obj.command) || typeof obj.command === 'string')) {
+      return { ...obj, command: Array.isArray(obj.command) ? obj.command.map(part => String(part)) : [obj.command] }
+    }
+    if (typeof obj.cmd === 'string') return { type: 'exec', command: ['bash', '-lc', obj.cmd] }
+    if (typeof obj.command === 'string') return { type: 'exec', command: ['bash', '-lc', obj.command] }
+  }
+  return { type: 'exec', command: ['bash', '-lc', String(parsed ?? '')] }
 }
 
 function extractCustomToolInput(argumentsJson: string): string {

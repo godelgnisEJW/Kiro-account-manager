@@ -271,6 +271,15 @@ The project is configured with GitHub Actions workflow for auto building all pla
 
 ## 📋 Changelog
 
+### v1.7.13 (2026-9-2) — Codex Local Shell Tool Compatibility
+
+#### 🤖 Responses API Tool Execution
+
+- **Fixed**: Preserves the Responses `local_shell` tool type instead of returning it as a generic function tool
+- **Fixed**: Converts Kiro workspace command calls back to native `local_shell_call` output with an executable action for Codex
+- **Fixed**: Streaming Responses no longer emit incompatible function-argument events for local shell calls
+- **Added**: Regression coverage for native local shell tool output and replay
+
 ### v1.7.12 (2026-9-1) — Workspace Tool Execution Recovery
 
 #### 🤖 Proxy and Agent Reliability

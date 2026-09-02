@@ -147,6 +147,7 @@ describe('OpenAI Responses compatibility', () => {
     })
 
     expect(converted.tools).toHaveLength(1)
+    expect(converted.tools?.[0].response_tool_type).toBe('local_shell')
     expect(converted.tools?.[0]).toMatchObject({
       type: 'function',
       function: {
@@ -155,6 +156,22 @@ describe('OpenAI Responses compatibility', () => {
           required: ['cmd']
         }
       }
+    })
+  })
+
+  test('returns Codex local shell calls in Responses-native shape', () => {
+    const converted = responsesToOpenAIChat({
+      model: 'gpt-5.6-sol', input: 'Inspect the repository.', tools: [{ type: 'local_shell' }]
+    })
+    const response = openAIChatToResponsesResponse({
+      id: 'chatcmpl_shell', object: 'chat.completion', created: 123, model: 'gpt-5.6-sol',
+      choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: [{
+        id: 'call_shell', type: 'function', function: { name: 'exec_command', arguments: '{"cmd":"git status --short"}' }
+      }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
+    }, undefined, converted.tools)
+    expect(response.output[0]).toMatchObject({
+      type: 'local_shell_call', call_id: 'call_shell',
+      action: { type: 'exec', command: ['bash', '-lc', 'git status --short'] }
     })
   })
 

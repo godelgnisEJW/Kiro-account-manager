@@ -271,6 +271,15 @@ npx electron-builder --linux --arm64
 
 ## 📋 更新日志
 
+### v1.7.13 (2026-9-2) — Codex 本地 Shell 工具兼容
+
+#### 🤖 Responses API 工具执行
+
+- **修复**: 保留 Responses 的 `local_shell` 工具类型，不再以普通函数工具返回
+- **修复**: 将 Kiro 工作区命令调用还原为带可执行 action 的原生 `local_shell_call`，供 Codex 识别并执行
+- **修复**: Responses 流式输出不再为本地 Shell 调用发送不兼容的函数参数事件
+- **新增**: 增加原生本地 Shell 工具输出与回放的回归测试
+
 ### v1.7.12 (2026-9-1) — 工作区工具执行自愈
 
 #### 🤖 反代与 Agent 稳定性
